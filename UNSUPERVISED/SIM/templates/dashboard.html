@@ -1,0 +1,1153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ML Market Making Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: #fff;
+            overflow-x: hidden;
+        }
+
+        .dashboard-container {
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            grid-template-rows: 80px 1fr;
+            height: 100vh;
+            gap: 10px;
+            padding: 10px;
+        }
+
+        .header {
+            grid-column: 1 / -1;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+
+        .header h1 {
+            font-size: 1.8rem;
+            font-weight: 600;
+            background: linear-gradient(45deg, #ff6b6b, #4ecdc4);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #4ecdc4;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .sidebar {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: repeat(3, 1fr);
+            gap: 15px;
+            overflow-y: auto;
+        }
+
+        .widget {
+            background: rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .widget:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
+        }
+
+        .widget-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: #fff;
+            border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+            padding-bottom: 10px;
+        }
+
+        .metric-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .metric-card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            padding: 15px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .metric-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .metric-label {
+            font-size: 0.8rem;
+            opacity: 0.8;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .metric-change {
+            font-size: 0.7rem;
+            margin-top: 5px;
+        }
+
+        .positive { color: #4ecdc4; }
+        .negative { color: #ff6b6b; }
+        .neutral { color: #ffd93d; }
+
+        .algorithm-status {
+            margin-bottom: 20px;
+        }
+
+        .algorithm-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            margin-bottom: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            border-left: 4px solid transparent;
+            transition: all 0.3s ease;
+        }
+
+        .algorithm-item.active {
+            border-left-color: #4ecdc4;
+            background: rgba(78, 205, 196, 0.1);
+        }
+
+        .algorithm-name {
+            font-weight: 500;
+        }
+
+        .algorithm-performance {
+            font-size: 0.9rem;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 200px;
+            margin-top: 10px;
+        }
+
+        .control-panel {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        .control-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 0.9rem;
+            opacity: 0.9;
+        }
+
+        .control-group input, .control-group select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 5px;
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+            font-size: 0.9rem;
+        }
+
+        .control-group input:focus, .control-group select:focus {
+            outline: none;
+            border-color: #4ecdc4;
+            box-shadow: 0 0 10px rgba(78, 205, 196, 0.3);
+        }
+
+        .btn {
+            background: linear-gradient(45deg, #4ecdc4, #44a08d);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            width: 100%;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(78, 205, 196, 0.4);
+        }
+
+        .alert {
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            border-left: 4px solid;
+        }
+
+        .alert-info {
+            background: rgba(52, 152, 219, 0.1);
+            border-left-color: #3498db;
+            color: #74b9ff;
+        }
+
+        .alert-warning {
+            background: rgba(241, 196, 15, 0.1);
+            border-left-color: #f1c40f;
+            color: #fdcb6e;
+        }
+
+        .alert-danger {
+            background: rgba(231, 76, 60, 0.1);
+            border-left-color: #e74c3c;
+            color: #ff7675;
+        }
+
+        .algorithm-comparison {
+            grid-column: 1 / -1;
+        }
+
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+
+        .comparison-table th,
+        .comparison-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .comparison-table th {
+            background: rgba(255, 255, 255, 0.05);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.8rem;
+            letter-spacing: 1px;
+        }
+
+        .comparison-table tr:hover {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .performance-badge {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .badge-excellent {
+            background: rgba(78, 205, 196, 0.2);
+            color: #4ecdc4;
+        }
+
+        .badge-good {
+            background: rgba(255, 217, 61, 0.2);
+            color: #ffd93d;
+        }
+
+        .badge-poor {
+            background: rgba(255, 107, 107, 0.2);
+            color: #ff6b6b;
+        }
+
+        .risk-indicator {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .risk-level {
+            width: 100px;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .risk-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4ecdc4, #ffd93d, #ff6b6b);
+            transition: width 0.3s ease;
+        }
+
+        @media (max-width: 1200px) {
+            .dashboard-container {
+                grid-template-columns: 250px 1fr;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .dashboard-container {
+                grid-template-columns: 1fr;
+                grid-template-rows: auto auto auto;
+            }
+            
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard-container">
+        <header class="header">
+            <h1>ML Market Making Dashboard</h1>
+            <div class="status-indicator">
+                <span class="status-dot"></span>
+                <span id="connectionStatus">Live Trading</span>
+                <span id="currentTime"></span>
+            </div>
+        </header>
+
+        <aside class="sidebar">
+            <div class="control-panel">
+                <h3>Trading Controls</h3>
+                <div class="control-group">
+                    <label for="activeAlgorithm">Active Algorithm</label>
+                    <select id="activeAlgorithm">
+                        <option value="profit_optimizer">Profit Optimizer</option>
+                        <option value="ml_ensemble">ML Ensemble</option>
+                        <option value="linear_micro">Linear Micro</option>
+                        <option value="baseline">Baseline</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="riskLimit">Risk Limit (%)</label>
+                    <input type="number" id="riskLimit" value="2.5" step="0.1" min="0" max="10">
+                </div>
+                <div class="control-group">
+                    <label for="maxInventory">Max Inventory</label>
+                    <input type="number" id="maxInventory" value="50" step="5" min="10" max="200">
+                </div>
+                <button class="btn" onclick="updateSettings()">Update Settings</button>
+            </div>
+
+            <div class="algorithm-status">
+                <h3>Algorithm Status</h3>
+                <div class="algorithm-item active" data-algo="profit_optimizer">
+                    <div class="algorithm-name">Profit Optimizer</div>
+                    <div class="algorithm-performance positive">+1.58%</div>
+                </div>
+                <div class="algorithm-item" data-algo="ml_ensemble">
+                    <div class="algorithm-name">ML Ensemble</div>
+                    <div class="algorithm-performance positive">+0.92%</div>
+                </div>
+                <div class="algorithm-item" data-algo="linear_micro">
+                    <div class="algorithm-name">Linear Micro</div>
+                    <div class="algorithm-performance positive">+0.96%</div>
+                </div>
+                <div class="algorithm-item" data-algo="baseline">
+                    <div class="algorithm-name">Baseline</div>
+                    <div class="algorithm-performance positive">+0.90%</div>
+                </div>
+            </div>
+
+            <div class="alert alert-info">
+                <strong>Info:</strong> All algorithms performing within normal parameters.
+            </div>
+
+            <div class="risk-indicator">
+                <span>Risk Level:</span>
+                <div class="risk-level">
+                    <div class="risk-fill" style="width: 35%;"></div>
+                </div>
+                <span>Low</span>
+            </div>
+        </aside>
+
+        <main class="main-content">
+            <div class="widget">
+                <div class="widget-title">Performance Metrics</div>
+                <div class="metric-grid">
+                    <div class="metric-card">
+                        <div class="metric-value positive" id="totalReturn">+1.58%</div>
+                        <div class="metric-label">Total Return</div>
+                        <div class="metric-change positive" id="returnChange">+0.12% (1h)</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value positive" id="sharpeRatio">4.82</div>
+                        <div class="metric-label">Sharpe Ratio</div>
+                        <div class="metric-change positive" id="sharpeChange">+0.21 (1h)</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value neutral" id="currentSpread">56.0</div>
+                        <div class="metric-label">Spread (bps)</div>
+                        <div class="metric-change negative" id="spreadChange">-2.1 (1h)</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value positive" id="volume">2,847</div>
+                        <div class="metric-label">Volume Traded</div>
+                        <div class="metric-change positive" id="volumeChange">+156 (1h)</div>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="performanceChart"></canvas>
+                </div>
+            </div>
+
+            <div class="widget">
+                <div class="widget-title">Real-Time P&L</div>
+                <div class="metric-grid">
+                    <div class="metric-card">
+                        <div class="metric-value positive" id="unrealizedPnL">+$3,247</div>
+                        <div class="metric-label">Unrealized P&L</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value positive" id="realizedPnL">+$1,892</div>
+                        <div class="metric-label">Realized P&L</div>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="pnlChart"></canvas>
+                </div>
+            </div>
+
+            <div class="widget">
+                <div class="widget-title">Market Microstructure</div>
+                <div class="metric-grid">
+                    <div class="metric-card">
+                        <div class="metric-value neutral" id="midPrice">$248.92</div>
+                        <div class="metric-label">Mid Price</div>
+                        <div class="metric-change negative" id="priceChange">-0.08% (1h)</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value neutral" id="inventory">+12</div>
+                        <div class="metric-label">Inventory</div>
+                        <div class="metric-change positive" id="inventoryChange">+3 (1h)</div>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="microstructureChart"></canvas>
+                </div>
+            </div>
+
+            <div class="widget">
+                <div class="widget-title">Toxicity Detection</div>
+                <div class="metric-grid">
+                    <div class="metric-card">
+                        <div class="metric-value neutral" id="toxicityScore">0.342</div>
+                        <div class="metric-label">Current Score</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value positive" id="detectionRate">2.4%</div>
+                        <div class="metric-label">Detection Rate</div>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="toxicityChart"></canvas>
+                </div>
+            </div>
+
+            <div class="widget">
+                <div class="widget-title">Order Flow Analysis</div>
+                <div class="metric-grid">
+                    <div class="metric-card">
+                        <div class="metric-value positive" id="fillRate">94.2%</div>
+                        <div class="metric-label">Fill Rate</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value neutral" id="avgFillTime">120ms</div>
+                        <div class="metric-label">Avg Fill Time</div>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="orderFlowChart"></canvas>
+                </div>
+            </div>
+
+            <div class="widget algorithm-comparison">
+                <div class="widget-title">Algorithm Comparison</div>
+                <table class="comparison-table">
+                    <thead>
+                        <tr>
+                            <th>Algorithm</th>
+                            <th>Return</th>
+                            <th>Sharpe</th>
+                            <th>Spread</th>
+                            <th>Volume</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="comparisonTableBody">
+                        <tr>
+                            <td>Profit Optimizer</td>
+                            <td class="positive">+1.58%</td>
+                            <td class="positive">4.82</td>
+                            <td>56.0 bps</td>
+                            <td>2,847</td>
+                            <td><span class="performance-badge badge-excellent">Excellent</span></td>
+                        </tr>
+                        <tr>
+                            <td>ML Ensemble</td>
+                            <td class="positive">+0.92%</td>
+                            <td class="positive">3.92</td>
+                            <td>59.4 bps</td>
+                            <td>2,653</td>
+                            <td><span class="performance-badge badge-good">Good</span></td>
+                        </tr>
+                        <tr>
+                            <td>Linear Micro</td>
+                            <td class="positive">+0.96%</td>
+                            <td class="positive">3.87</td>
+                            <td>66.9 bps</td>
+                            <td>2,421</td>
+                            <td><span class="performance-badge badge-good">Good</span></td>
+                        </tr>
+                        <tr>
+                            <td>Baseline</td>
+                            <td class="positive">+0.90%</td>
+                            <td class="positive">3.62</td>
+                            <td>68.2 bps</td>
+                            <td>2,198</td>
+                            <td><span class="performance-badge badge-good">Good</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // Global chart configurations
+        Chart.defaults.color = '#ffffff';
+        Chart.defaults.borderColor = 'rgba(255, 255, 255, 0.1)';
+        Chart.defaults.backgroundColor = 'rgba(78, 205, 196, 0.1)';
+
+        // Real-time data simulation
+        class MarketDataSimulator {
+            constructor() {
+                this.timeStep = 0;
+                this.basePrice = 248.92;
+                this.basePnL = 3247;
+                this.baseSpread = 56.0;
+                this.baseToxicity = 0.342;
+                this.charts = {};
+                this.isRunning = false;
+            }
+
+            generateData() {
+                this.timeStep++;
+                
+                // Simulate market movement
+                const priceChange = (Math.random() - 0.5) * 0.5;
+                this.basePrice += priceChange;
+                
+                const pnlChange = (Math.random() - 0.45) * 50; // Slight positive bias
+                this.basePnL += pnlChange;
+                
+                const spreadChange = (Math.random() - 0.5) * 2;
+                this.baseSpread = Math.max(30, this.baseSpread + spreadChange);
+                
+                const toxicityChange = (Math.random() - 0.5) * 0.1;
+                this.baseToxicity = Math.max(0, Math.min(1, this.baseToxicity + toxicityChange));
+
+                return {
+                    timestamp: new Date(),
+                    price: this.basePrice,
+                    pnl: this.basePnL,
+                    spread: this.baseSpread,
+                    toxicity: this.baseToxicity,
+                    volume: Math.floor(Math.random() * 50) + 20,
+                    return: ((this.basePnL / 100000) * 100).toFixed(2)
+                };
+            }
+
+            start() {
+                this.isRunning = true;
+                this.updateLoop();
+            }
+
+            stop() {
+                this.isRunning = false;
+            }
+
+            updateLoop() {
+                if (!this.isRunning) return;
+
+                const data = this.generateData();
+                this.updateMetrics(data);
+                this.updateCharts(data);
+
+                setTimeout(() => this.updateLoop(), 2000); // Update every 2 seconds
+            }
+
+            updateMetrics(data) {
+                // Update performance metrics
+                document.getElementById('totalReturn').textContent = `+${data.return}%`;
+                document.getElementById('midPrice').textContent = `$${data.price.toFixed(2)}`;
+                document.getElementById('currentSpread').textContent = data.spread.toFixed(1);
+                document.getElementById('unrealizedPnL').textContent = `+$${Math.floor(data.pnl)}`;
+                document.getElementById('toxicityScore').textContent = data.toxicity.toFixed(3);
+                
+                // Update timestamp
+                document.getElementById('currentTime').textContent = data.timestamp.toLocaleTimeString();
+            }
+
+            updateCharts(data) {
+                // Update performance chart
+                if (this.charts.performance) {
+                    const chart = this.charts.performance;
+                    const now = data.timestamp.toLocaleTimeString();
+                    
+                    chart.data.labels.push(now);
+                    chart.data.datasets[0].data.push(parseFloat(data.return));
+                    
+                    // Keep last 20 points
+                    if (chart.data.labels.length > 20) {
+                        chart.data.labels.shift();
+                        chart.data.datasets[0].data.shift();
+                    }
+                    
+                    chart.update('none');
+                }
+
+                // Update P&L chart
+                if (this.charts.pnl) {
+                    const chart = this.charts.pnl;
+                    const now = data.timestamp.toLocaleTimeString();
+                    
+                    chart.data.labels.push(now);
+                    chart.data.datasets[0].data.push(data.pnl);
+                    
+                    if (chart.data.labels.length > 20) {
+                        chart.data.labels.shift();
+                        chart.data.datasets[0].data.shift();
+                    }
+                    
+                    chart.update('none');
+                }
+
+                // Update toxicity chart
+                if (this.charts.toxicity) {
+                    const chart = this.charts.toxicity;
+                    const now = data.timestamp.toLocaleTimeString();
+                    
+                    chart.data.labels.push(now);
+                    chart.data.datasets[0].data.push(data.toxicity);
+                    
+                    if (chart.data.labels.length > 20) {
+                        chart.data.labels.shift();
+                        chart.data.datasets[0].data.shift();
+                    }
+                    
+                    chart.update('none');
+                }
+
+                // Update microstructure chart (spread)
+                if (this.charts.microstructure) {
+                    const chart = this.charts.microstructure;
+                    const now = data.timestamp.toLocaleTimeString();
+                    
+                    chart.data.labels.push(now);
+                    chart.data.datasets[0].data.push(data.spread);
+                    
+                    if (chart.data.labels.length > 20) {
+                        chart.data.labels.shift();
+                        chart.data.datasets[0].data.shift();
+                    }
+                    
+                    chart.update('none');
+                }
+
+                // Update order flow chart (volume)
+                if (this.charts.orderFlow) {
+                    const chart = this.charts.orderFlow;
+                    const now = data.timestamp.toLocaleTimeString();
+                    
+                    chart.data.labels.push(now);
+                    chart.data.datasets[0].data.push(data.volume);
+                    
+                    if (chart.data.labels.length > 20) {
+                        chart.data.labels.shift();
+                        chart.data.datasets[0].data.shift();
+                    }
+                    
+                    chart.update('none');
+                }
+            }
+        }
+
+        // Initialize charts
+        function initializeCharts(simulator) {
+            const chartOptions = {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        display: false
+                    }
+                },
+                scales: {
+                    x: {
+                        display: false
+                    },
+                    y: {
+                        beginAtZero: false,
+                        grid: {
+                            color: 'rgba(255, 255, 255, 0.1)'
+                        }
+                    }
+                },
+                elements: {
+                    line: {
+                        tension: 0.4
+                    },
+                    point: {
+                        radius: 0
+                    }
+                },
+                animation: {
+                    duration: 0
+                }
+            };
+
+            // Performance Chart
+            simulator.charts.performance = new Chart(document.getElementById('performanceChart'), {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Return %',
+                        data: [],
+                        borderColor: '#4ecdc4',
+                        backgroundColor: 'rgba(78, 205, 196, 0.1)',
+                        fill: true
+                    }]
+                },
+                options: chartOptions
+            });
+
+            // P&L Chart
+            simulator.charts.pnl = new Chart(document.getElementById('pnlChart'), {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'P&L $',
+                        data: [],
+                        borderColor: '#ffd93d',
+                        backgroundColor: 'rgba(255, 217, 61, 0.1)',
+                        fill: true
+                    }]
+                },
+                options: chartOptions
+            });
+
+            // Toxicity Chart
+            simulator.charts.toxicity = new Chart(document.getElementById('toxicityChart'), {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Toxicity Score',
+                        data: [],
+                        borderColor: '#ff6b6b',
+                        backgroundColor: 'rgba(255, 107, 107, 0.1)',
+                        fill: true
+                    }]
+                },
+                options: {
+                    ...chartOptions,
+                    scales: {
+                        ...chartOptions.scales,
+                        y: {
+                            ...chartOptions.scales.y,
+                            min: 0,
+                            max: 1
+                        }
+                    }
+                }
+            });
+
+            // Microstructure Chart (Spread)
+            simulator.charts.microstructure = new Chart(document.getElementById('microstructureChart'), {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Spread (bps)',
+                        data: [],
+                        borderColor: '#a29bfe',
+                        backgroundColor: 'rgba(162, 155, 254, 0.1)',
+                        fill: true
+                    }]
+                },
+                options: chartOptions
+            });
+
+            // Order Flow Chart (Volume)
+            simulator.charts.orderFlow = new Chart(document.getElementById('orderFlowChart'), {
+                type: 'bar',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Volume',
+                        data: [],
+                        backgroundColor: 'rgba(78, 205, 196, 0.6)',
+                        borderColor: '#4ecdc4',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    ...chartOptions,
+                    scales: {
+                        ...chartOptions.scales,
+                        y: {
+                            ...chartOptions.scales.y,
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+
+        // Control functions
+        function updateSettings() {
+            const activeAlgo = document.getElementById('activeAlgorithm').value;
+            const riskLimit = document.getElementById('riskLimit').value;
+            const maxInventory = document.getElementById('maxInventory').value;
+            
+            // Update active algorithm status
+            document.querySelectorAll('.algorithm-item').forEach(item => {
+                item.classList.remove('active');
+                if (item.dataset.algo === activeAlgo) {
+                    item.classList.add('active');
+                }
+            });
+            
+            // Show confirmation
+            showNotification(`Settings updated: ${activeAlgo.replace('_', ' ').toUpperCase()} active`, 'success');
+            
+            // Update risk level display
+            const riskPercentage = Math.min(100, (riskLimit / 10) * 100);
+            document.querySelector('.risk-fill').style.width = riskPercentage + '%';
+            
+            console.log('Updated settings:', { activeAlgo, riskLimit, maxInventory });
+        }
+
+        function showNotification(message, type = 'info') {
+            const alerts = document.querySelector('.sidebar');
+            const existingAlert = alerts.querySelector('.temp-alert');
+            if (existingAlert) existingAlert.remove();
+            
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `alert alert-${type} temp-alert`;
+            alertDiv.innerHTML = `<strong>${type.toUpperCase()}:</strong> ${message}`;
+            
+            alerts.appendChild(alertDiv);
+            
+            setTimeout(() => {
+                alertDiv.remove();
+            }, 3000);
+        }
+
+        // Algorithm switching
+        function switchAlgorithm(algorithmName) {
+            document.getElementById('activeAlgorithm').value = algorithmName;
+            updateSettings();
+        }
+
+        // Emergency controls
+        function emergencyStop() {
+            if (confirm('Are you sure you want to initiate emergency stop? This will halt all trading immediately.')) {
+                simulator.stop();
+                showNotification('EMERGENCY STOP ACTIVATED - All trading halted', 'danger');
+                document.querySelector('.status-dot').style.background = '#ff6b6b';
+                document.getElementById('connectionStatus').textContent = 'STOPPED';
+            }
+        }
+
+        function pauseTrading() {
+            simulator.stop();
+            showNotification('Trading paused', 'warning');
+            document.querySelector('.status-dot').style.background = '#ffd93d';
+            document.getElementById('connectionStatus').textContent = 'PAUSED';
+        }
+
+        function resumeTrading() {
+            simulator.start();
+            showNotification('Trading resumed', 'success');
+            document.querySelector('.status-dot').style.background = '#4ecdc4';
+            document.getElementById('connectionStatus').textContent = 'Live Trading';
+        }
+
+        // Add keyboard shortcuts
+        document.addEventListener('keydown', function(e) {
+            if (e.ctrlKey || e.metaKey) {
+                switch(e.key) {
+                    case '1':
+                        e.preventDefault();
+                        switchAlgorithm('profit_optimizer');
+                        break;
+                    case '2':
+                        e.preventDefault();
+                        switchAlgorithm('ml_ensemble');
+                        break;
+                    case '3':
+                        e.preventDefault();
+                        switchAlgorithm('linear_micro');
+                        break;
+                    case '4':
+                        e.preventDefault();
+                        switchAlgorithm('baseline');
+                        break;
+                    case 'p':
+                        e.preventDefault();
+                        pauseTrading();
+                        break;
+                    case 'r':
+                        e.preventDefault();
+                        resumeTrading();
+                        break;
+                }
+            }
+        });
+
+        // Initialize everything when page loads
+        let simulator;
+        
+        document.addEventListener('DOMContentLoaded', function() {
+            simulator = new MarketDataSimulator();
+            initializeCharts(simulator);
+            
+            // Start the simulation
+            simulator.start();
+            
+            // Add click handlers for algorithm items
+            document.querySelectorAll('.algorithm-item').forEach(item => {
+                item.addEventListener('click', function() {
+                    const algo = this.dataset.algo;
+                    switchAlgorithm(algo);
+                });
+            });
+            
+            // Show initial notification
+            setTimeout(() => {
+                showNotification('Dashboard initialized - Live data streaming', 'success');
+            }, 1000);
+            
+            // Add some initial data points to charts
+            for (let i = 0; i < 10; i++) {
+                setTimeout(() => {
+                    const data = simulator.generateData();
+                    simulator.updateCharts(data);
+                }, i * 200);
+            }
+        });
+
+        // Performance monitoring and alerts
+        function checkPerformanceAlerts() {
+            const currentReturn = parseFloat(document.getElementById('totalReturn').textContent.replace(/[+%]/g, ''));
+            const currentSpread = parseFloat(document.getElementById('currentSpread').textContent);
+            const inventory = parseInt(document.getElementById('inventory').textContent.replace('+', ''));
+            const maxInventory = parseInt(document.getElementById('maxInventory').value);
+            
+            // Check for alerts
+            if (currentReturn < -1.0) {
+                showNotification('Performance Alert: Return below -1%', 'danger');
+            }
+            
+            if (currentSpread > 100) {
+                showNotification('Spread Alert: Spread above 100 bps', 'warning');
+            }
+            
+            if (Math.abs(inventory) > maxInventory * 0.8) {
+                showNotification(`Inventory Alert: Position at ${Math.abs(inventory)}/${maxInventory}`, 'warning');
+            }
+        }
+
+        // Run performance checks every 30 seconds
+        setInterval(checkPerformanceAlerts, 30000);
+
+        // Export data functionality
+        function exportData() {
+            const data = {
+                timestamp: new Date().toISOString(),
+                performance: {
+                    return: document.getElementById('totalReturn').textContent,
+                    sharpe: document.getElementById('sharpeRatio').textContent,
+                    spread: document.getElementById('currentSpread').textContent,
+                    volume: document.getElementById('volume').textContent
+                },
+                positions: {
+                    inventory: document.getElementById('inventory').textContent,
+                    unrealizedPnL: document.getElementById('unrealizedPnL').textContent,
+                    realizedPnL: document.getElementById('realizedPnL').textContent
+                },
+                market: {
+                    midPrice: document.getElementById('midPrice').textContent,
+                    toxicityScore: document.getElementById('toxicityScore').textContent,
+                    fillRate: document.getElementById('fillRate').textContent
+                }
+            };
+            
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `market_making_data_${new Date().toISOString().slice(0, 19)}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+            
+            showNotification('Data exported successfully', 'success');
+        }
+
+        // Add export button to sidebar
+        setTimeout(() => {
+            const sidebar = document.querySelector('.sidebar');
+            const exportBtn = document.createElement('button');
+            exportBtn.className = 'btn';
+            exportBtn.textContent = 'Export Data';
+            exportBtn.style.marginTop = '10px';
+            exportBtn.onclick = exportData;
+            sidebar.appendChild(exportBtn);
+            
+            // Add emergency controls
+            const emergencyBtn = document.createElement('button');
+            emergencyBtn.className = 'btn';
+            emergencyBtn.style.background = 'linear-gradient(45deg, #ff6b6b, #ee5a52)';
+            emergencyBtn.style.marginTop = '10px';
+            emergencyBtn.textContent = 'Emergency Stop';
+            emergencyBtn.onclick = emergencyStop;
+            sidebar.appendChild(emergencyBtn);
+            
+            // Add keyboard shortcuts info
+            const shortcutsDiv = document.createElement('div');
+            shortcutsDiv.style.marginTop = '20px';
+            shortcutsDiv.style.fontSize = '0.8rem';
+            shortcutsDiv.style.opacity = '0.7';
+            shortcutsDiv.innerHTML = `
+                <h4>Keyboard Shortcuts:</h4>
+                <div>Ctrl+1-4: Switch algorithms</div>
+                <div>Ctrl+P: Pause trading</div>
+                <div>Ctrl+R: Resume trading</div>
+            `;
+            sidebar.appendChild(shortcutsDiv);
+        }, 2000);
+
+        // Real-time status updates
+        function updateConnectionStatus() {
+            const statusDot = document.querySelector('.status-dot');
+            const connectionStatus = document.getElementById('connectionStatus');
+            
+            // Simulate connection health
+            const isHealthy = Math.random() > 0.1; // 90% uptime simulation
+            
+            if (isHealthy) {
+                statusDot.style.background = '#4ecdc4';
+                connectionStatus.textContent = 'Live Trading';
+            } else {
+                statusDot.style.background = '#ffd93d';
+                connectionStatus.textContent = 'Reconnecting...';
+                showNotification('Connection issues detected, attempting reconnect...', 'warning');
+                
+                // Simulate reconnection
+                setTimeout(() => {
+                    statusDot.style.background = '#4ecdc4';
+                    connectionStatus.textContent = 'Live Trading';
+                    showNotification('Connection restored', 'success');
+                }, 3000);
+            }
+        }
+
+        // Check connection every 2 minutes
+        setInterval(updateConnectionStatus, 120000);
+
+        // Add tooltips for metrics
+        function addTooltips() {
+            const tooltips = {
+                'totalReturn': 'Total return percentage since start of trading session',
+                'sharpeRatio': 'Risk-adjusted return metric (return/volatility)',
+                'currentSpread': 'Current bid-ask spread in basis points',
+                'volume': 'Total volume traded in current session',
+                'unrealizedPnL': 'Mark-to-market profit/loss on open positions',
+                'realizedPnL': 'Profit/loss from closed positions',
+                'midPrice': 'Current mid-market price',
+                'inventory': 'Current inventory position (positive = long)',
+                'toxicityScore': 'ML-predicted toxicity score (0=safe, 1=toxic)',
+                'fillRate': 'Percentage of orders that get filled',
+                'avgFillTime': 'Average time for order execution'
+            };
+
+            Object.entries(tooltips).forEach(([id, tooltip]) => {
+                const element = document.getElementById(id);
+                if (element) {
+                    element.title = tooltip;
+                    element.style.cursor = 'help';
+                }
+            });
+        }
+
+        // Initialize tooltips
+        setTimeout(addTooltips, 1000);
+
+        // Make the dashboard responsive to window resize
+        window.addEventListener('resize', function() {
+            Object.values(simulator.charts).forEach(chart => {
+                chart.resize();
+            });
+        });
+
+        console.log('🚀 ML Market Making Dashboard Initialized');
+        console.log('📊 Real-time monitoring active');
+        console.log('⚡ Use Ctrl+1-4 to switch algorithms quickly');
+    </script>
+</body>
+</html>

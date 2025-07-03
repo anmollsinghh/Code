@@ -1,0 +1,2 @@
+timestamp,ml_model_used,baseline_return,ml_return,improvement,baseline_avg_spread,ml_avg_spread,baseline_inventory_std,ml_inventory_std
+20250608_014841,ml_models/ml_enhanced_market_maker_20250607_163351.joblib,6.225370979610245,9.857729186210307,3.6323582066000615,96.57566137387364,103.08558487715547,6.548168390987651,7.109435983247969
