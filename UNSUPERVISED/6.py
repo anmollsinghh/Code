@@ -594,6 +594,7 @@ class AdvancedToxicityDetector:
                     n_estimators=hyperparameters.get('n_estimators', 200),
                     random_state=42 + i,
                     bootstrap=True
+                    n_jobs=-1
                 )
                 iso_forest.fit(X_scaled)
                 detectors[f'isolation_forest_{contamination}'] = iso_forest
@@ -608,6 +609,7 @@ class AdvancedToxicityDetector:
                     n_neighbors=neighbors,
                     contamination=hyperparameters.get('contamination', 0.1),
                     novelty=True
+                    n_jobs = -1
                 )
                 lof.fit(X_scaled)
                 detectors[f'lof_{neighbors}'] = lof
