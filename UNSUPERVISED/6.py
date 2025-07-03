@@ -593,7 +593,7 @@ class AdvancedToxicityDetector:
                     contamination=contamination,
                     n_estimators=hyperparameters.get('n_estimators', 200),
                     random_state=42 + i,
-                    bootstrap=True
+                    bootstrap=True,
                     n_jobs=-1
                 )
                 iso_forest.fit(X_scaled)
@@ -608,7 +608,7 @@ class AdvancedToxicityDetector:
                 lof = LocalOutlierFactor(
                     n_neighbors=neighbors,
                     contamination=hyperparameters.get('contamination', 0.1),
-                    novelty=True
+                    novelty=True,
                     n_jobs = -1
                 )
                 lof.fit(X_scaled)
