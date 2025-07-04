@@ -1489,7 +1489,7 @@ def create_detailed_time_series(results, save_dir, timestamp):
     plt.savefig(f"{save_dir}/detailed_analysis_{timestamp}.png", dpi=300, bbox_inches='tight')
     plt.show()
 
-def run_ml_enhanced_comparison(model_path="calibrated_toxicity_models/enhanced_toxicity_detector_20250626_005749.joblib", 
+def run_ml_enhanced_comparison(model_path="calibrated_toxicity_models/enhanced_toxicity_detector_20250704_004512.joblib", 
                                 n_steps=2000):
     """Main function to run the ML-enhanced market maker comparison"""
     
@@ -1624,7 +1624,7 @@ def run_ml_enhanced_comparison(model_path="calibrated_toxicity_models/enhanced_t
     # Example usage
 if __name__ == "__main__":
     # Run the comparison study
-    model_path = "calibrated_toxicity_models/enhanced_toxicity_detector_20250626_005749.joblib"
+    model_path = "calibrated_toxicity_models/enhanced_toxicity_detector_20250704_004512.joblib"
     
     try:
         print("🚀 Starting ML-Enhanced Market Maker Comparison...")
