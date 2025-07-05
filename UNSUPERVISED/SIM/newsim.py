@@ -478,10 +478,6 @@ class MLEnhancedMarketMaker(Agent):
         # CRITICAL: Update volume tracking
         self.total_volume_traded += trade.quantity
         self.total_trades += 1
-        
-        # Track adverse selection
-        if hasattr(trade, 'is_toxic') and trade.is_toxic:
-            self.adverse_selection_count += 1
             
         # Additional market maker specific tracking
         if is_buyer:
@@ -500,7 +496,17 @@ class MLEnhancedMarketMaker(Agent):
             'is_toxic': getattr(trade, 'is_toxic', False)
         })
 
+    def update_adverse_selection_from_trades(self, all_trades):
+        """Update adverse selection count after toxicity has been calculated"""
+        self.adverse_selection_count = 0
         
+        for trade in all_trades:
+            # Check if this market maker was involved and if trade was toxic
+            if ((trade.buyer_id == self.id or trade.seller_id == self.id) and 
+                hasattr(trade, 'is_toxic') and trade.is_toxic):
+                self.adverse_selection_count += 1
+    
+    
     def get_market_context(self, timestamp, mid_price):
         """Get enhanced market context for ML prediction"""
         recent_volume = sum(trade.quantity for trade in list(self.recent_trades)[-5:]) if self.recent_trades else 0
@@ -617,6 +623,9 @@ class MLEnhancedMarketMaker(Agent):
         final_capital = self.pnl_history[-1][1]
         total_return = (final_capital / initial_capital - 1) * 100 if initial_capital > 0 else 0.0
         
+        # CORRECT adverse selection rate calculation
+        adverse_selection_rate = self.adverse_selection_count / max(1, self.total_trades)
+        
         metrics = {
             'total_return_pct': float(total_return),
             'final_inventory': self.inventory,
@@ -625,12 +634,13 @@ class MLEnhancedMarketMaker(Agent):
             'avg_spread_bps': np.mean(self.spread_history) if self.spread_history else 0.0,
             'spread_volatility': np.std(self.spread_history) if len(self.spread_history) > 1 else 0.0,
             'avg_toxicity_score': np.mean(self.toxicity_history) if self.toxicity_history else 0.0,
-            'adverse_selection_rate': self.adverse_selection_count / max(1, self.total_trades),
+            'adverse_selection_rate': adverse_selection_rate,  # Now correctly calculated
             'inventory_volatility': np.std(self.inventory_history) if len(self.inventory_history) > 1 else 0.0,
             'algorithm_stats': self.spread_algorithm.get_statistics()
         }
         
         return metrics
+
 
 
 class MLEnhancedMarketEnvironment:
@@ -749,69 +759,17 @@ class MLEnhancedMarketEnvironment:
 
     
     def run_comparison_simulation(self, n_steps=None):
-        """Run simulation comparing all spread algorithms using working pattern from original"""
+        """Run simulation comparing all spread algorithms"""
         n_steps = n_steps or TIME_STEPS
         
         print(f"Running ML-enhanced simulation with {len(self.spread_algorithms)} algorithms...")
         print(f"Algorithms: {list(self.spread_algorithms.keys())}")
         
         for t in range(n_steps):
-            self.current_time = t
-            mid_price = self.order_book.get_mid_price()
+            # ... existing simulation code ...
             
-            # Prepare market context for market makers
-            market_context = {
-                'recent_prices': [p for _, p in self.order_book.price_history[-20:]] if self.order_book.price_history else [mid_price],
-                'recent_trades': self.order_book.trades[-50:] if self.order_book.trades else [],
-                'current_depth': len(self.order_book.bids) + len(self.order_book.asks)
-            }
-            
-            # Update agent PnLs
-            for agent in self.agents:
-                agent.update_pnl(mid_price, t)
-            
-            # Market makers place orders with enhanced context (using original pattern)
-            for agent in self.agents:
-                if isinstance(agent, MLEnhancedMarketMaker):
-                    # Update adverse selection estimates like original
-                    recent_trades = market_context['recent_trades']
-                    if hasattr(agent, 'update_adverse_selection_estimate'):
-                        agent.update_adverse_selection_estimate(recent_trades)
-                    
-                    orders = agent.generate_orders(t, mid_price, market_context)
-                    for order in orders:
-                        self.order_book.add_limit_order(order, t)
-            
-            # Other agents place orders (using original pattern)
-            for agent in self.agents:
-                if not isinstance(agent, MLEnhancedMarketMaker):
-                    order = None
-                    
-                    if isinstance(agent, ImprovedInformedTrader):
-                        order = agent.generate_order(t, self.price_path[t])
-                    else:  # SmartNoiseTrader
-                        order = agent.generate_order(t, mid_price)
-                    
-                    if order:
-                        if order.type == MARKET:
-                            self.order_book.add_market_order(order, t)
-                        else:
-                            self.order_book.add_limit_order(order, t)
-            
-            # Record trades and update agent states (from original)
-            trades_this_step = [trade for trade in self.order_book.trades if trade.timestamp == t]
-            
-            for trade in trades_this_step:
-                buyer = next((a for a in self.agents if a.id == trade.buyer_id), None)
-                seller = next((a for a in self.agents if a.id == trade.seller_id), None)
-                
-                if buyer:
-                    buyer.record_trade(trade, True)
-                if seller:
-                    seller.record_trade(trade, False)
-
+            # ADD debugging every 200 steps
             if t % 200 == 0 and t > 0:
-                # Debug market maker performance
                 print(f"\nStep {t} Debug:")
                 for algo_name, mm in self.market_makers.items():
                     trades = mm.total_trades
@@ -820,23 +778,6 @@ class MLEnhancedMarketEnvironment:
                     inv = mm.inventory
                     spread_avg = np.mean(mm.spread_history[-10:]) if len(mm.spread_history) >= 10 else 0
                     print(f"  {algo_name:15}: Trades={trades:3d}, Vol={volume:3d}, Inv={inv:3d}, Spread={spread_avg:.1f}bps")
-
-            # Record statistics
-            if t % 100 == 0:
-                self._record_comparison_stats(t)
-                
-                # Count different trade types
-                total_trades = len(self.order_book.trades)
-                mm_trades = sum(1 for trade in self.order_book.trades 
-                            if any(trade.buyer_id == mm.id or trade.seller_id == mm.id 
-                                    for mm in self.market_makers.values()))
-                informed_trades = sum(1 for trade in self.order_book.trades 
-                                    if any((trade.buyer_id == a.id and a.type == 'informed') or 
-                                        (trade.seller_id == a.id and a.type == 'informed') 
-                                        for a in self.agents))
-                
-                print(f"Progress: {t}/{n_steps} ({100*t/n_steps:.1f}%) - "
-                    f"Total: {total_trades}, MM involved: {mm_trades}, Informed: {informed_trades}")
         
         # Final statistics
         self._record_comparison_stats(n_steps)
@@ -844,20 +785,36 @@ class MLEnhancedMarketEnvironment:
         # Post-process toxicity (from original)
         self._calculate_trade_toxicity()
         
+        # CRITICAL: Update adverse selection AFTER toxicity calculation
+        for mm in self.market_makers.values():
+            mm.update_adverse_selection_from_trades(self.order_book.trades)
+        
         print("✓ Simulation completed")
         
-        # Final trade statistics
+        # Final trade statistics with adverse selection
         total_trades = len(self.order_book.trades)
         mm_trades = sum(1 for trade in self.order_book.trades 
                     if any(trade.buyer_id == mm.id or trade.seller_id == mm.id 
                             for mm in self.market_makers.values()))
         
+        toxic_trades = sum(1 for trade in self.order_book.trades 
+                        if hasattr(trade, 'is_toxic') and trade.is_toxic)
+        
         print(f"Final Statistics:")
         print(f"  Total trades: {total_trades}")
         print(f"  Market maker involved: {mm_trades}")
+        print(f"  Toxic trades: {toxic_trades} ({toxic_trades/total_trades*100:.1f}%)")
         print(f"  Trading rate: {total_trades/n_steps:.2f} trades/step")
         
+        # Print adverse selection by algorithm
+        print(f"\nAdverse Selection by Algorithm:")
+        for algo_name, mm in self.market_makers.items():
+            adverse_rate = mm.adverse_selection_count / max(1, mm.total_trades) * 100
+            print(f"  {algo_name:15}: {mm.adverse_selection_count:3d}/{mm.total_trades:3d} = {adverse_rate:.1f}%")
+        
         return self.get_comparison_results()
+
+
 
     def update_adverse_selection_estimate(self, recent_trades, window=50):
         """Estimate adverse selection from recent trade outcomes (from original)"""
