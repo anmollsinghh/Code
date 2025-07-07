@@ -65,7 +65,7 @@ def run_multiple_comparisons(n_runs=10, model_path=None, n_steps=1000, save_indi
                     run_data = {
                         'total_return_pct': metrics['total_return_pct'],
                         'avg_spread_bps': metrics['avg_spread_bps'],
-                        'sharpe_ratio': result['sharpe_ratio'],
+                        'information_ratio': result['information_ratio'],
                         'adverse_selection_rate': metrics['adverse_selection_rate'],
                         'max_drawdown': result['max_drawdown'],
                         'total_volume_traded': metrics['total_volume_traded'],
@@ -174,8 +174,8 @@ def create_summary_statistics(aggregated_results, n_runs, timestamp):
             'Return_CI_Upper': algo_stats['total_return_pct']['ci_upper'],
             'Mean_Spread_bps': algo_stats['avg_spread_bps']['mean'],
             'Std_Spread_bps': algo_stats['avg_spread_bps']['std'],
-            'Mean_Sharpe': algo_stats['sharpe_ratio']['mean'],
-            'Std_Sharpe': algo_stats['sharpe_ratio']['std'],
+            'Mean_Information': algo_stats['information_ratio']['mean'],
+            'Std_Information': algo_stats['information_ratio']['std'],
             'Mean_Adverse_Selection_%': algo_stats['adverse_selection_rate']['mean'] * 100,
             'Std_Adverse_Selection_%': algo_stats['adverse_selection_rate']['std'] * 100,
             'Mean_Max_Drawdown_%': algo_stats['max_drawdown']['mean'],
@@ -201,7 +201,7 @@ def create_summary_statistics(aggregated_results, n_runs, timestamp):
     # Print key metrics table
     print("MEAN PERFORMANCE COMPARISON:")
     print("-" * 80)
-    print(f"{'Algorithm':<15} {'Return%':<10} {'±Std':<8} {'Spread':<10} {'Sharpe':<8} {'Adverse%':<10}")
+    print(f"{'Algorithm':<15} {'Return%':<10} {'±Std':<8} {'Spread':<10} {'Information':<8} {'Adverse%':<10}")
     print("-" * 80)
     
     for _, row in summary_df.iterrows():
@@ -209,7 +209,7 @@ def create_summary_statistics(aggregated_results, n_runs, timestamp):
               f"{row['Mean_Return_%']:<9.2f} "
               f"±{row['Std_Return_%']:<7.2f} "
               f"{row['Mean_Spread_bps']:<9.1f} "
-              f"{row['Mean_Sharpe']:<7.2f} "
+              f"{row['Mean_Information']:<7.2f} "
               f"{row['Mean_Adverse_Selection_%']:<9.1f}")
     
     print("\n95% CONFIDENCE INTERVALS FOR RETURNS:")
@@ -237,8 +237,8 @@ def create_summary_statistics(aggregated_results, n_runs, timestamp):
     print(f"🎯 Most Consistent: {most_consistent['Algorithm']} (σ = {most_consistent['Std_Return_%']:.2f}%)")
     
     # Best risk-adjusted
-    best_sharpe = summary_df.loc[summary_df['Mean_Sharpe'].idxmax()]
-    print(f"📈 Best Risk-Adjusted: {best_sharpe['Algorithm']} (Sharpe = {best_sharpe['Mean_Sharpe']:.2f})")
+    best_Information = summary_df.loc[summary_df['Mean_Information'].idxmax()]
+    print(f"📈 Best Risk-Adjusted: {best_Information['Algorithm']} (Information = {best_Information['Mean_Information']:.2f})")
     
     return summary_df
 
@@ -292,14 +292,14 @@ def create_multi_run_visualizations(aggregated_results, n_runs, timestamp):
         axes[0, 1].text(bar.get_x() + bar.get_width()/2, height + std + 0.1,
                        f'{mean:.2f}%', ha='center', va='bottom', fontweight='bold')
     
-    # 3. Sharpe Ratio Comparison
-    sharpe_means = [aggregated_results[algo]['sharpe_ratio']['mean'] for algo in algorithms]
-    sharpe_stds = [aggregated_results[algo]['sharpe_ratio']['std'] for algo in algorithms]
+    # 3. Information Ratio Comparison
+    Information_means = [aggregated_results[algo]['information_ratio']['mean'] for algo in algorithms]
+    Information_stds = [aggregated_results[algo]['information_ratio']['std'] for algo in algorithms]
     
-    bars = axes[0, 2].bar(algorithms, sharpe_means, yerr=sharpe_stds, capsize=5,
+    bars = axes[0, 2].bar(algorithms, Information_means, yerr=Information_stds, capsize=5,
                          color=colors, alpha=0.7, edgecolor='black')
-    axes[0, 2].set_title('Mean Sharpe Ratios', fontweight='bold')
-    axes[0, 2].set_ylabel('Sharpe Ratio')
+    axes[0, 2].set_title('Mean Information Ratios', fontweight='bold')
+    axes[0, 2].set_ylabel('Information Ratio')
     axes[0, 2].grid(True, alpha=0.3)
     axes[0, 2].tick_params(axis='x', rotation=45)
     
@@ -330,16 +330,16 @@ def create_multi_run_visualizations(aggregated_results, n_runs, timestamp):
     axes[1, 1].tick_params(axis='x', rotation=45)
     
     # 6. Risk-Return Scatter with Error Bars
-    axes[1, 2].errorbar(sharpe_means, return_means, xerr=sharpe_stds, yerr=stds,
+    axes[1, 2].errorbar(Information_means, return_means, xerr=Information_stds, yerr=stds,
                        fmt='o', capsize=5, capthick=2, markersize=8, alpha=0.7)
     
     for i, (algo, color) in enumerate(zip(algorithms, colors)):
-        axes[1, 2].scatter(sharpe_means[i], return_means[i], c=[color], s=150, alpha=0.8, edgecolors='black')
-        axes[1, 2].annotate(algo.upper(), (sharpe_means[i], return_means[i]),
+        axes[1, 2].scatter(Information_means[i], return_means[i], c=[color], s=150, alpha=0.8, edgecolors='black')
+        axes[1, 2].annotate(algo.upper(), (Information_means[i], return_means[i]),
                            xytext=(5, 5), textcoords='offset points', fontweight='bold')
     
     axes[1, 2].set_title('Risk-Return Profile with Uncertainty', fontweight='bold')
-    axes[1, 2].set_xlabel('Sharpe Ratio')
+    axes[1, 2].set_xlabel('Information Ratio')
     axes[1, 2].set_ylabel('Return (%)')
     axes[1, 2].grid(True, alpha=0.3)
     
@@ -461,11 +461,11 @@ def main():
             print(f"   Standard Deviation: ±{most_consistent[1]['total_return_pct']['std']:.2f}%")
             
             # Best risk-adjusted
-            best_sharpe = max(aggregated_results.items(),
-                            key=lambda x: x[1]['sharpe_ratio']['mean'])
+            best_Information = max(aggregated_results.items(),
+                            key=lambda x: x[1]['information_ratio']['mean'])
             
-            print(f"📈 Best Risk-Adjusted Algorithm: {best_sharpe[0].upper()}")
-            print(f"   Mean Sharpe Ratio: {best_sharpe[1]['sharpe_ratio']['mean']:.2f}")
+            print(f"📈 Best Risk-Adjusted Algorithm: {best_Information[0].upper()}")
+            print(f"   Mean Information Ratio: {best_Information[1]['information_ratio']['mean']:.2f}")
             
         else:
             print("❌ No successful runs completed")

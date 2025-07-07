@@ -759,14 +759,83 @@ class MLEnhancedMarketEnvironment:
 
     
     def run_comparison_simulation(self, n_steps=None):
-        """Run simulation comparing all spread algorithms"""
+        """Run simulation comparing all spread algorithms using working pattern from original"""
         n_steps = n_steps or TIME_STEPS
         
         print(f"Running ML-enhanced simulation with {len(self.spread_algorithms)} algorithms...")
         print(f"Algorithms: {list(self.spread_algorithms.keys())}")
         
         for t in range(n_steps):
-            # ... existing simulation code ...
+            self.current_time = t
+            mid_price = self.order_book.get_mid_price()
+            
+            # Prepare market context for market makers
+            market_context = {
+                'recent_prices': [p for _, p in self.order_book.price_history[-20:]] if self.order_book.price_history else [mid_price],
+                'recent_trades': self.order_book.trades[-50:] if self.order_book.trades else [],
+                'current_depth': len(self.order_book.bids) + len(self.order_book.asks)
+            }
+            
+            # Update agent PnLs
+            for agent in self.agents:
+                agent.update_pnl(mid_price, t)
+            
+            # Market makers place orders with enhanced context (using original pattern)
+            for agent in self.agents:
+                if isinstance(agent, MLEnhancedMarketMaker):
+                    # Update adverse selection estimates like original
+                    recent_trades = market_context['recent_trades']
+                    if hasattr(agent, 'update_adverse_selection_estimate'):
+                        agent.update_adverse_selection_estimate(recent_trades)
+                    
+                    orders = agent.generate_orders(t, mid_price, market_context)
+                    for order in orders:
+                        self.order_book.add_limit_order(order, t)
+            
+            # Other agents place orders (using original pattern)
+            for agent in self.agents:
+                if not isinstance(agent, MLEnhancedMarketMaker):
+                    order = None
+                    
+                    if isinstance(agent, ImprovedInformedTrader):
+                        order = agent.generate_order(t, self.price_path[t])
+                    else:  # SmartNoiseTrader
+                        order = agent.generate_order(t, mid_price)
+                    
+                    if order:
+                        if order.type == MARKET:
+                            self.order_book.add_market_order(order, t)
+                        else:
+                            self.order_book.add_limit_order(order, t)
+            
+            # Record trades and update agent states (from original)
+            trades_this_step = [trade for trade in self.order_book.trades if trade.timestamp == t]
+            
+            for trade in trades_this_step:
+                buyer = next((a for a in self.agents if a.id == trade.buyer_id), None)
+                seller = next((a for a in self.agents if a.id == trade.seller_id), None)
+                
+                if buyer:
+                    buyer.record_trade(trade, True)
+                if seller:
+                    seller.record_trade(trade, False)
+            
+            # Record statistics
+            if t % 100 == 0:
+                self._record_comparison_stats(t)
+                
+                # Count different trade types
+                total_trades = len(self.order_book.trades)
+                mm_trades = sum(1 for trade in self.order_book.trades 
+                            if any(trade.buyer_id == mm.id or trade.seller_id == mm.id 
+                                    for mm in self.market_makers.values()))
+                informed_trades = sum(1 for trade in self.order_book.trades 
+                                    if any((trade.buyer_id == a.id and hasattr(a, 'type') and a.type == 'informed') or 
+                                        (trade.seller_id == a.id and hasattr(a, 'type') and a.type == 'informed') 
+                                        for a in self.agents))
+                
+                print(f"Progress: {t}/{n_steps} ({100*t/n_steps:.1f}%) - "
+                    f"Total: {total_trades}, MM involved: {mm_trades}, Informed: {informed_trades}")
             
             # ADD debugging every 200 steps
             if t % 200 == 0 and t > 0:
@@ -803,17 +872,57 @@ class MLEnhancedMarketEnvironment:
         print(f"Final Statistics:")
         print(f"  Total trades: {total_trades}")
         print(f"  Market maker involved: {mm_trades}")
-        print(f"  Toxic trades: {toxic_trades} ({toxic_trades/total_trades*100:.1f}%)")
-        print(f"  Trading rate: {total_trades/n_steps:.2f} trades/step")
+        if total_trades > 0:
+            print(f"  Toxic trades: {toxic_trades} ({toxic_trades/total_trades*100:.1f}%)")
+            print(f"  Trading rate: {total_trades/n_steps:.2f} trades/step")
         
         # Print adverse selection by algorithm
-        print(f"\nAdverse Selection by Algorithm:")
-        for algo_name, mm in self.market_makers.items():
-            adverse_rate = mm.adverse_selection_count / max(1, mm.total_trades) * 100
-            print(f"  {algo_name:15}: {mm.adverse_selection_count:3d}/{mm.total_trades:3d} = {adverse_rate:.1f}%")
+        if total_trades > 0:
+            print(f"\nAdverse Selection by Algorithm:")
+            for algo_name, mm in self.market_makers.items():
+                adverse_rate = mm.adverse_selection_count / max(1, mm.total_trades) * 100
+                print(f"  {algo_name:15}: {mm.adverse_selection_count:3d}/{mm.total_trades:3d} = {adverse_rate:.1f}%")
         
         return self.get_comparison_results()
 
+    def get_comparison_results(self):
+        """Get comprehensive comparison results"""
+        results = {}
+        
+        for algo_name, mm in self.market_makers.items():
+            metrics = mm.get_performance_metrics()
+            
+            # Calculate additional metrics
+            mm_trades = [t for t in self.order_book.trades 
+                        if t.buyer_id == mm.id or t.seller_id == mm.id]
+            toxic_mm_trades = [t for t in mm_trades if hasattr(t, 'is_toxic') and t.is_toxic]
+            
+            # Calculate Information Ratio
+            information_ratio = self._calculate_information_ratio(mm)
+            
+            # Calculate max drawdown
+            max_drawdown = self._calculate_max_drawdown(mm)
+            
+            # Calculate spread efficiency (avoid division by zero)
+            avg_spread = metrics.get('avg_spread_bps', 0)
+            if avg_spread > 0:
+                spread_efficiency = metrics.get('total_return_pct', 0) / avg_spread
+            else:
+                spread_efficiency = 0.0
+            
+            results[algo_name] = {
+                'performance_metrics': metrics,
+                'total_mm_trades': len(mm_trades),
+                'toxic_mm_trades': len(toxic_mm_trades),
+                'toxicity_rate': len(toxic_mm_trades) / max(1, len(mm_trades)),
+                'spread_efficiency': float(spread_efficiency),
+                'information_ratio': float(information_ratio),
+                'max_drawdown': float(max_drawdown),
+                'algorithm_name': algo_name,
+                'beta_parameter': getattr(mm.spread_algorithm, 'beta', None)
+            }
+        
+        return results
 
 
     def update_adverse_selection_estimate(self, recent_trades, window=50):
@@ -926,8 +1035,8 @@ class MLEnhancedMarketEnvironment:
                         if t.buyer_id == mm.id or t.seller_id == mm.id]
             toxic_mm_trades = [t for t in mm_trades if hasattr(t, 'is_toxic') and t.is_toxic]
             
-            # Calculate Sharpe ratio
-            sharpe_ratio = self._calculate_sharpe_ratio(mm)
+            # Calculate Information Ratio
+            information_ratio = self._calculate_information_ratio(mm)
             
             # Calculate max drawdown
             max_drawdown = self._calculate_max_drawdown(mm)
@@ -945,7 +1054,7 @@ class MLEnhancedMarketEnvironment:
             'toxic_mm_trades': len(toxic_mm_trades),
             'toxicity_rate': len(toxic_mm_trades) / max(1, len(mm_trades)),
             'spread_efficiency': float(spread_efficiency),
-            'sharpe_ratio': float(sharpe_ratio),
+            'information_ratio': float(information_ratio),
             'max_drawdown': float(max_drawdown),
             'algorithm_name': algo_name,
             'beta_parameter': getattr(mm.spread_algorithm, 'beta', None)
@@ -953,46 +1062,62 @@ class MLEnhancedMarketEnvironment:
     
         return results
     
-    def _calculate_sharpe_ratio(self, mm):
-        """Calculate Sharpe ratio for market maker - SAFE VERSION"""
-        if len(mm.pnl_history) < 10:  # Need minimum data
+    def _calculate_information_ratio(self, mm):
+        """
+        Calculate Information Ratio for minute-level market making data
+        
+        Information Ratio = Mean Return / Standard Deviation of Returns
+        (No risk-free rate adjustment - perfect for short-term trading)
+        """
+        if len(mm.pnl_history) < 10:
             return 0.0
         
         try:
-            # Extract PnL values
             pnl_values = [pnl[1] for pnl in mm.pnl_history]
             
-            # Simple total return calculation
-            if pnl_values[0] <= 0 or pnl_values[-1] <= 0:
+            if pnl_values[0] <= 0:
                 return 0.0
-                
-            total_return = (pnl_values[-1] / pnl_values[0]) - 1
             
-            # Calculate period returns for volatility
+            # Calculate minute-to-minute returns
             returns = []
             for i in range(1, len(pnl_values)):
                 if pnl_values[i-1] > 0:
-                    ret = (pnl_values[i] - pnl_values[i-1]) / pnl_values[i-1]
-                    returns.append(ret)
+                    minute_return = (pnl_values[i] - pnl_values[i-1]) / pnl_values[i-1]
+                    returns.append(minute_return)
             
             if len(returns) < 2:
                 return 0.0
-                
-            volatility = np.std(returns)
-            if volatility <= 0:
-                return 0.0
-                
-            # Simple Sharpe approximation
+            
+            returns = np.array(returns)
+            
+            # Calculate mean and standard deviation
             mean_return = np.mean(returns)
-            sharpe = mean_return / volatility
+            std_return = np.std(returns, ddof=1)  # Sample standard deviation
             
-            # Bound the result to reasonable range
-            sharpe = max(-5.0, min(5.0, sharpe))
+            if std_return <= 0:
+                # If no volatility but positive return, return high ratio
+                total_return = (pnl_values[-1] / pnl_values[0]) - 1
+                return 3.0 if total_return > 0 else 0.0
             
-            return float(sharpe)
+            # Information Ratio (raw)
+            info_ratio = mean_return / std_return
+            
+            # Scale for minute-level data
+            # 252 trading days * 6.5 hours * 60 minutes = 98,280 minutes per year
+            minutes_per_year = 252 * 6.5 * 60
+            
+            # Conservative annualization scaling
+            # Use sqrt of effective trading periods
+            effective_periods = min(len(returns), minutes_per_year)
+            scaling_factor = np.sqrt(effective_periods / 100)  # Conservative scaling
+            
+            # Apply scaling
+            scaled_info_ratio = info_ratio * scaling_factor
+            
+            return float(scaled_info_ratio)
             
         except Exception as e:
-            print(f"Sharpe calculation error: {e}")
+            print(f"Information Ratio calculation error: {e}")
             return 0.0
 
 
@@ -1363,15 +1488,15 @@ def create_comparison_visualizations(results, save_dir="ml_comparison_plots"):
         axes[0, 2].text(bar.get_x() + bar.get_width()/2, height + 0.1, 
                        f'{value:.1f}%', ha='center', va='bottom', fontsize=8)
     
-    # 4. Sharpe Ratio Comparison
-    sharpe_ratios = [results[algo]['sharpe_ratio'] for algo in algorithms]
-    bars = axes[1, 0].bar(algorithms, sharpe_ratios, color=colors, alpha=0.8)
-    axes[1, 0].set_title('Sharpe Ratio', fontweight='bold')
-    axes[1, 0].set_ylabel('Sharpe Ratio')
+    # 4. Information Ratio Comparison
+    information_ratios = [results[algo]['information_ratio'] for algo in algorithms]
+    bars = axes[1, 0].bar(algorithms, information_ratios, color=colors, alpha=0.8)
+    axes[1, 0].set_title('Information Ratio', fontweight='bold')
+    axes[1, 0].set_ylabel('Information Ratio')
     axes[1, 0].grid(True, alpha=0.3)
     axes[1, 0].tick_params(axis='x', rotation=45)
     
-    for bar, value in zip(bars, sharpe_ratios):
+    for bar, value in zip(bars, information_ratios):
         height = bar.get_height()
         axes[1, 0].text(bar.get_x() + bar.get_width()/2, height + 0.05, 
                        f'{value:.2f}', ha='center', va='bottom', fontsize=8)
@@ -1515,17 +1640,17 @@ def create_detailed_time_series(results, save_dir, timestamp):
     
     # 3. Risk-Return Scatter
     returns = [results[algo]['performance_metrics']['total_return_pct'] for algo in algorithms]
-    sharpes = [results[algo]['sharpe_ratio'] for algo in algorithms]
+    informations = [results[algo]['information_ratio'] for algo in algorithms]
     
-    scatter = axes[1, 0].scatter(sharpes, returns, c=colors[:len(algorithms)], 
+    scatter = axes[1, 0].scatter(informations, returns, c=colors[:len(algorithms)], 
                                 s=200, alpha=0.7, edgecolors='black')
     
     for i, algo in enumerate(algorithms):
-        axes[1, 0].annotate(algo.upper(), (sharpes[i], returns[i]), 
+        axes[1, 0].annotate(algo.upper(), (informations[i], returns[i]), 
                             xytext=(5, 5), textcoords='offset points', fontweight='bold')
     
     axes[1, 0].set_title('Risk-Return Profile', fontweight='bold')
-    axes[1, 0].set_xlabel('Sharpe Ratio')
+    axes[1, 0].set_xlabel('Information Ratio')
     axes[1, 0].set_ylabel('Total Return (%)')
     axes[1, 0].grid(True, alpha=0.3)
     
@@ -1625,7 +1750,7 @@ def run_ml_enhanced_comparison(model_path="calibrated_toxicity_models/enhanced_t
     # Print summary table
     print("\nALGORITHM PERFORMANCE SUMMARY:")
     print("-" * 60)
-    print(f"{'Algorithm':<12} {'Return%':<8} {'Spread':<8} {'Sharpe':<8} {'Adverse%':<9} {'Volume':<8}")
+    print(f"{'Algorithm':<12} {'Return%':<8} {'Spread':<8} {'information':<8} {'Adverse%':<9} {'Volume':<8}")
     print("-" * 60)
     
     for algo_name, result in results.items():
@@ -1633,7 +1758,7 @@ def run_ml_enhanced_comparison(model_path="calibrated_toxicity_models/enhanced_t
         print(f"{algo_name.upper():<12} "
                 f"{metrics['total_return_pct']:<7.2f}% "
                 f"{metrics['avg_spread_bps']:<7.1f} "
-                f"{result['sharpe_ratio']:<7.2f} "
+                f"{result['information_ratio']:<7.2f} "
                 f"{metrics['adverse_selection_rate']*100:<8.1f}% "
                 f"{metrics['total_volume_traded']:<8.0f}")
     
@@ -1642,12 +1767,12 @@ def run_ml_enhanced_comparison(model_path="calibrated_toxicity_models/enhanced_t
     print("-" * 15)
     
     best_return = max(results.items(), key=lambda x: x[1]['performance_metrics']['total_return_pct'])
-    best_sharpe = max(results.items(), key=lambda x: x[1]['sharpe_ratio'])
+    best_information = max(results.items(), key=lambda x: x[1]['information_ratio'])
     lowest_adverse = min(results.items(), key=lambda x: x[1]['performance_metrics']['adverse_selection_rate'])
     most_efficient = max(results.items(), key=lambda x: x[1]['spread_efficiency'])
     
     print(f"🏆 Best Return: {best_return[0].upper()} ({best_return[1]['performance_metrics']['total_return_pct']:.2f}%)")
-    print(f"📈 Best Sharpe: {best_sharpe[0].upper()} ({best_sharpe[1]['sharpe_ratio']:.2f})")
+    print(f"📈 Best information: {best_information[0].upper()} ({best_information[1]['information_ratio']:.2f})")
     print(f"🛡️  Lowest Adverse Selection: {lowest_adverse[0].upper()} ({lowest_adverse[1]['performance_metrics']['adverse_selection_rate']*100:.1f}%)")
     print(f"⚡ Most Efficient: {most_efficient[0].upper()} ({most_efficient[1]['spread_efficiency']:.3f})")
     
@@ -1669,7 +1794,7 @@ def run_ml_enhanced_comparison(model_path="calibrated_toxicity_models/enhanced_t
         algo: {
             'return_pct': result['performance_metrics']['total_return_pct'],
             'avg_spread_bps': result['performance_metrics']['avg_spread_bps'],
-            'sharpe_ratio': result['sharpe_ratio'],
+            'information_ratio': result['information_ratio'],
             'adverse_selection_rate': result['performance_metrics']['adverse_selection_rate'],
             'max_drawdown': result['max_drawdown'],
             'total_volume': result['performance_metrics']['total_volume_traded'],
@@ -1687,23 +1812,6 @@ def run_ml_enhanced_comparison(model_path="calibrated_toxicity_models/enhanced_t
     print("\n" + "="*80)
     print("ML-ENHANCED COMPARISON STUDY COMPLETED")
     print("="*80)
-    
-    # Final recommendations
-    print(f"\n🎯 RECOMMENDATIONS:")
-    print("-" * 20)
-    
-    if best_return[0] == 'baseline':
-        print("• The baseline algorithm performed best - ML adjustments may be too aggressive")
-    elif best_return[0] == 'linear':
-        print("• Linear adjustment provides good balance of performance and simplicity")
-    elif best_return[0] == 'exponential':
-        print("• Exponential adjustment effectively responds to high toxicity scenarios")
-    elif best_return[0] == 'threshold':
-        print("• Threshold-based approach provides robust step-wise protection")
-    
-    print(f"• Consider tuning β parameters for {best_return[0]} algorithm")
-    print(f"• Monitor adverse selection rates below {lowest_adverse[1]['performance_metrics']['adverse_selection_rate']*100:.1f}%")
-    print(f"• Target spread efficiency above {most_efficient[1]['spread_efficiency']:.3f}")
     
     return results, env
 
