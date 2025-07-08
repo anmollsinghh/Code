@@ -81,8 +81,6 @@ class EnhancedMarketDataFeatureEngineer:
         
         # Create order type from lobster message types
         if 'Type' in orders_df.columns:
-            # Type 1 = submission, Type 2 = cancellation, Type 3 = deletion, 
-            # Type 4 = execution (visible), Type 5 = execution (hidden)
             orders_df['order_type'] = orders_df['Type'].map({
                 1: 'LIMIT', 2: 'CANCEL', 3: 'DELETE', 4: 'MARKET', 5: 'MARKET'
             }).fillna('LIMIT')
@@ -93,6 +91,18 @@ class EnhancedMarketDataFeatureEngineer:
         
         # Convert LOB price and size columns to numeric
         print("Converting LOB data to numeric...")
+        
+        # Check if first row contains header data and remove it
+        first_row_check = lob_df.iloc[0]
+        contains_text = any(isinstance(val, str) and not str(val).replace('.', '').replace('-', '').isdigit() 
+                        for val in first_row_check.values[:8] if pd.notna(val))
+        
+        if contains_text:
+            print("Removing header row from LOB data...")
+            lob_df = lob_df.iloc[1:].reset_index(drop=True)
+            # Update timestamp after removing header row
+            lob_df['timestamp'] = pd.Series(range(len(lob_df)), dtype='int64')
+        
         for i in range(1, 11):
             ask_price_col = f'Ask_Price_{i}'
             ask_size_col = f'Ask_Size_{i}'
@@ -110,7 +120,6 @@ class EnhancedMarketDataFeatureEngineer:
         
         # Calculate mid price from LOB data
         if len(lob_df) > 0:
-            # Best bid is Bid_Price_1, best ask is Ask_Price_1
             if 'Ask_Price_1' in lob_df.columns and 'Bid_Price_1' in lob_df.columns:
                 # Ensure both columns are numeric and greater than 0
                 valid_mask = (lob_df['Ask_Price_1'] > 0) & (lob_df['Bid_Price_1'] > 0)
@@ -147,26 +156,25 @@ class EnhancedMarketDataFeatureEngineer:
                     0
                 )
             
-            # Merge LOB features with orders using index-based merge since timestamps are sequential
+            # Merge LOB features with orders using timestamp
             print("Merging LOB features with orders...")
             
-            # Ensure both dataframes have the same length or handle the merge appropriately
-            min_length = min(len(orders_df), len(lob_df))
+            # Ensure timestamps are the same data type
+            orders_df['timestamp'] = orders_df['timestamp'].astype('int64')
+            lob_df['timestamp'] = lob_df['timestamp'].astype('int64')
             
-            # Take first min_length rows from both dataframes
-            orders_subset = orders_df.iloc[:min_length].copy()
-            lob_subset = lob_df.iloc[:min_length].copy()
+            # Use merge_asof to align the data
+            merged = pd.merge_asof(
+                orders_df[['timestamp']].reset_index().sort_values('timestamp'),
+                lob_df[['timestamp', 'mid_price', 'spread', 'order_book_imbalance']].sort_values('timestamp'),
+                on='timestamp',
+                direction='backward'
+            ).set_index('index').sort_index()
             
-            # Add LOB features to orders
+            # Add merged features back to orders_df
             for col in ['mid_price', 'spread', 'order_book_imbalance']:
-                if col in lob_subset.columns:
-                    orders_subset[col] = lob_subset[col].values
-            
-            # Update the original orders_df
-            for col in ['mid_price', 'spread', 'order_book_imbalance']:
-                if col in orders_subset.columns:
-                    orders_df[col] = 0.0  # Initialize
-                    orders_df.iloc[:min_length, orders_df.columns.get_loc(col)] = orders_subset[col].values
+                if col in merged.columns:
+                    orders_df[col] = merged[col].fillna(0)
         
         # Calculate additional features
         if 'mid_price' in orders_df.columns:
@@ -204,13 +212,17 @@ class EnhancedMarketDataFeatureEngineer:
         lob_features = pd.DataFrame(index=orders_df.index)
         
         if len(lob_df) > 0 and 'timestamp' in lob_df.columns and 'timestamp' in orders_df.columns:
+            # Ensure timestamp data types match
+            orders_df['timestamp'] = orders_df['timestamp'].astype('int64')
+            lob_df['timestamp'] = lob_df['timestamp'].astype('int64')
+            
             # Merge LOB data with orders
             merged = pd.merge_asof(
-                orders_df[['timestamp']].reset_index(),
-                lob_df,
+                orders_df[['timestamp']].reset_index().sort_values('timestamp'),
+                lob_df.sort_values('timestamp'),
                 on='timestamp',
                 direction='backward'
-            ).set_index('index')
+            ).set_index('index').sort_index()
             
             # Enhanced depth features for 5 levels
             total_bid_depth = pd.Series(0, index=merged.index)
@@ -223,8 +235,8 @@ class EnhancedMarketDataFeatureEngineer:
                 ask_price_col = f'Ask_Price_{level}'
                 
                 if all(col in merged.columns for col in [bid_size_col, ask_size_col]):
-                    bid_size = merged[bid_size_col].fillna(0)
-                    ask_size = merged[ask_size_col].fillna(0)
+                    bid_size = pd.to_numeric(merged[bid_size_col], errors='coerce').fillna(0)
+                    ask_size = pd.to_numeric(merged[ask_size_col], errors='coerce').fillna(0)
                     
                     total_bid_depth += bid_size
                     total_ask_depth += ask_size
@@ -237,11 +249,18 @@ class EnhancedMarketDataFeatureEngineer:
                     
                     # Price level features
                     if all(col in merged.columns for col in [bid_price_col, ask_price_col]):
-                        bid_price = merged[bid_price_col].fillna(0)
-                        ask_price = merged[ask_price_col].fillna(0)
-                        lob_features[f'spread_L{level}'] = ask_price - bid_price
-                        if level == 1:
-                            lob_features['mid_price_lob'] = (bid_price + ask_price) / 2
+                        bid_price = pd.to_numeric(merged[bid_price_col], errors='coerce').fillna(0)
+                        ask_price = pd.to_numeric(merged[ask_price_col], errors='coerce').fillna(0)
+                        
+                        # Only calculate spread for valid prices
+                        valid_prices = (bid_price > 0) & (ask_price > 0)
+                        lob_features[f'spread_L{level}'] = 0.0
+                        if valid_prices.any():
+                            lob_features.loc[valid_prices, f'spread_L{level}'] = ask_price[valid_prices] - bid_price[valid_prices]
+                        
+                        if level == 1 and valid_prices.any():
+                            lob_features['mid_price_lob'] = 0.0
+                            lob_features.loc[valid_prices, 'mid_price_lob'] = (bid_price[valid_prices] + ask_price[valid_prices]) / 2
             
             # Aggregate depth features
             lob_features['total_bid_depth'] = total_bid_depth
@@ -264,40 +283,46 @@ class EnhancedMarketDataFeatureEngineer:
         for i in range(1, 11):
             lob_headers.extend([f'Ask_Price_{i}', f'Ask_Size_{i}', f'Bid_Price_{i}', f'Bid_Size_{i}'])
         
-        # Try to read a few lines first to check the format
+        # Try to read a few lines first to check if there are headers
         try:
             sample_df = pd.read_csv(orderbook_file, nrows=5, header=None)
             print(f"Orderbook sample shape: {sample_df.shape}")
-            print(f"First few values: {sample_df.iloc[0, :8].tolist()}")
+            first_row_values = sample_df.iloc[0, :8].tolist()
+            print(f"First few values: {first_row_values}")
+            
+            # Check if first row contains headers (strings instead of numbers)
+            has_headers = any(isinstance(val, str) and not val.replace('.', '').replace('-', '').isdigit() 
+                            for val in first_row_values if val is not None)
+            
+            if has_headers:
+                print("Detected headers in orderbook file, skipping first row...")
+                lob_df = pd.read_csv(orderbook_file, header=0, names=lob_headers, skiprows=0)
+                # The header row becomes the column names, so we don't need to skip additional rows
+            else:
+                print("No headers detected in orderbook file...")
+                lob_df = pd.read_csv(orderbook_file, header=None, names=lob_headers)
+                
         except Exception as e:
             print(f"Warning: Could not read orderbook sample: {e}")
+            # Default to no headers
+            lob_df = pd.read_csv(orderbook_file, header=None, names=lob_headers)
         
-        lob_df = pd.read_csv(orderbook_file, header=None, names=lob_headers)
         print(f"LOB data: {len(lob_df)} snapshots")
         
         # Load message data
         print(f"Loading message data from {message_file}...")
         
-        # Check if message file has headers
-        try:
-            sample_orders = pd.read_csv(message_file, nrows=5)
-            print(f"Message data columns: {sample_orders.columns.tolist()}")
-            print(f"Message sample shape: {sample_orders.shape}")
-            print(f"First message: {sample_orders.iloc[0].tolist()}")
-        except Exception as e:
-            print(f"Warning: Could not read message sample: {e}")
-        
         orders_df = pd.read_csv(message_file)
         print(f"Orders data: {len(orders_df)} records")
         
-        # Create synthetic timestamp if needed
+        # Create synthetic timestamp ensuring consistent data types
         if 'Time' in orders_df.columns:
-            orders_df['timestamp'] = orders_df['Time']
+            orders_df['timestamp'] = pd.to_numeric(orders_df['Time'], errors='coerce').fillna(0).astype('int64')
         else:
-            orders_df['timestamp'] = range(len(orders_df))
+            orders_df['timestamp'] = pd.Series(range(len(orders_df)), dtype='int64')
         
-        # Add timestamp to LOB data to match with orders
-        lob_df['timestamp'] = range(len(lob_df))
+        # Add timestamp to LOB data with same data type
+        lob_df['timestamp'] = pd.Series(range(len(lob_df)), dtype='int64')
         
         # Create trades_df as empty for now (can be derived from message data if needed)
         trades_df = pd.DataFrame()
@@ -1586,61 +1611,6 @@ def main_enhanced_training_pipeline(orderbook_file, message_file, n_trials=30):
     model_path = detector.save_enhanced_model()
     
     return detector, ensemble_scores, metrics
-
-def preprocess_lobster_data(self, orders_df, lob_df):
-    """Preprocess lobster data to create required features"""
-    print("Preprocessing lobster data...")
-    
-    # Process orders data
-    if 'Size' in orders_df.columns:
-        orders_df['quantity'] = orders_df['Size']
-    
-    if 'Price' in orders_df.columns:
-        orders_df['price'] = orders_df['Price']
-    
-    # Create order type from lobster message types
-    if 'Type' in orders_df.columns:
-        # Type 1 = submission, Type 2 = cancellation, Type 3 = deletion, 
-        # Type 4 = execution (visible), Type 5 = execution (hidden)
-        orders_df['order_type'] = orders_df['Type'].map({
-            1: 'LIMIT', 2: 'CANCEL', 3: 'DELETE', 4: 'MARKET', 5: 'MARKET'
-        }).fillna('LIMIT')
-    
-    # Create side from Direction
-    if 'Direction' in orders_df.columns:
-        orders_df['side'] = orders_df['Direction'].map({1: 'BUY', -1: 'SELL'}).fillna('BUY')
-    
-    # Calculate mid price from LOB data
-    if len(lob_df) > 0:
-        # Best bid is Bid_Price_1, best ask is Ask_Price_1
-        if 'Ask_Price_1' in lob_df.columns and 'Bid_Price_1' in lob_df.columns:
-            lob_df['mid_price'] = (lob_df['Ask_Price_1'] + lob_df['Bid_Price_1']) / 2
-            lob_df['spread'] = lob_df['Ask_Price_1'] - lob_df['Bid_Price_1']
-            
-            # Calculate order book imbalance
-            total_bid_size = sum([lob_df[f'Bid_Size_{i}'] for i in range(1, 6)])
-            total_ask_size = sum([lob_df[f'Ask_Size_{i}'] for i in range(1, 6)])
-            lob_df['order_book_imbalance'] = (total_bid_size - total_ask_size) / (total_bid_size + total_ask_size + 1e-8)
-        
-        # Merge LOB features with orders
-        merged_df = pd.merge_asof(
-            orders_df.sort_values('timestamp'),
-            lob_df[['timestamp', 'mid_price', 'spread', 'order_book_imbalance']].sort_values('timestamp'),
-            on='timestamp',
-            direction='backward'
-        )
-        
-        # Add merged features back to orders_df
-        for col in ['mid_price', 'spread', 'order_book_imbalance']:
-            if col in merged_df.columns:
-                orders_df[col] = merged_df[col]
-    
-    # Calculate additional features
-    if 'mid_price' in orders_df.columns:
-        orders_df['volatility'] = orders_df['mid_price'].rolling(20, min_periods=1).std().fillna(0)
-        orders_df['momentum'] = orders_df['mid_price'].pct_change(5).fillna(0)
-    
-    return orders_df, lob_df
 
 # Main execution
 if __name__ == "__main__":
