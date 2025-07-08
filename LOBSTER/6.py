@@ -36,6 +36,38 @@ class EnhancedMarketDataFeatureEngineer:
         self.feature_names = []
         self.feature_importance_scores = {}
     
+    def validate_lobster_data(self, orders_df, lob_df):
+        """Validate and clean lobster data"""
+        print("Validating LOBSTER data...")
+        
+        # Check orders data
+        print(f"Orders data validation:")
+        print(f"  Shape: {orders_df.shape}")
+        print(f"  Columns: {orders_df.columns.tolist()}")
+        
+        if 'Size' in orders_df.columns:
+            print(f"  Size column type: {orders_df['Size'].dtype}")
+            print(f"  Size sample values: {orders_df['Size'].head().tolist()}")
+        
+        if 'Price' in orders_df.columns:
+            print(f"  Price column type: {orders_df['Price'].dtype}")
+            print(f"  Price sample values: {orders_df['Price'].head().tolist()}")
+        
+        # Check LOB data
+        print(f"\nLOB data validation:")
+        print(f"  Shape: {lob_df.shape}")
+        print(f"  Columns: {lob_df.columns.tolist()[:8]}...")  # Show first 8 columns
+        
+        if 'Ask_Price_1' in lob_df.columns:
+            print(f"  Ask_Price_1 type: {lob_df['Ask_Price_1'].dtype}")
+            print(f"  Ask_Price_1 sample: {lob_df['Ask_Price_1'].head().tolist()}")
+        
+        if 'Bid_Price_1' in lob_df.columns:
+            print(f"  Bid_Price_1 type: {lob_df['Bid_Price_1'].dtype}")
+            print(f"  Bid_Price_1 sample: {lob_df['Bid_Price_1'].head().tolist()}")
+        
+        return True
+
     def preprocess_lobster_data(self, orders_df, lob_df):
         """Preprocess lobster data to create required features"""
         print("Preprocessing lobster data...")
@@ -1502,37 +1534,6 @@ def create_enhanced_visualizations(features_df, ensemble_scores, individual_scor
    for file in sorted(plot_files):
        print(f"  {file}")
 
-def validate_lobster_data(self, orders_df, lob_df):
-    """Validate and clean lobster data"""
-    print("Validating LOBSTER data...")
-    
-    # Check orders data
-    print(f"Orders data validation:")
-    print(f"  Shape: {orders_df.shape}")
-    print(f"  Columns: {orders_df.columns.tolist()}")
-    
-    if 'Size' in orders_df.columns:
-        print(f"  Size column type: {orders_df['Size'].dtype}")
-        print(f"  Size sample values: {orders_df['Size'].head().tolist()}")
-    
-    if 'Price' in orders_df.columns:
-        print(f"  Price column type: {orders_df['Price'].dtype}")
-        print(f"  Price sample values: {orders_df['Price'].head().tolist()}")
-    
-    # Check LOB data
-    print(f"\nLOB data validation:")
-    print(f"  Shape: {lob_df.shape}")
-    print(f"  Columns: {lob_df.columns.tolist()[:8]}...")  # Show first 8 columns
-    
-    if 'Ask_Price_1' in lob_df.columns:
-        print(f"  Ask_Price_1 type: {lob_df['Ask_Price_1'].dtype}")
-        print(f"  Ask_Price_1 sample: {lob_df['Ask_Price_1'].head().tolist()}")
-    
-    if 'Bid_Price_1' in lob_df.columns:
-        print(f"  Bid_Price_1 type: {lob_df['Bid_Price_1'].dtype}")
-        print(f"  Bid_Price_1 sample: {lob_df['Bid_Price_1'].head().tolist()}")
-    
-    return True
 
 def main_enhanced_training_pipeline(orderbook_file, message_file, n_trials=30):
     """Enhanced training pipeline for lobster toxicity detection"""
