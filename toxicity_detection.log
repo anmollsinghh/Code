@@ -1,0 +1,4 @@
+2025-07-09 14:36:56,869 - __main__ - INFO - Loading market data...
+2025-07-09 14:36:56,869 - __main__ - INFO - Starting data loading
+2025-07-09 14:36:56,870 - __main__ - ERROR - Error in data loading: Data directory market_data does not exist
+2025-07-09 14:36:56,870 - __main__ - ERROR - Error in main execution: Data directory market_data does not exist
