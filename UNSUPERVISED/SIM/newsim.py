@@ -17,8 +17,8 @@ import random
 from model import LSTMAutoencoder
 warnings.filterwarnings('ignore')
 
-# Import base simulation components (assuming they're available)
-from complete_enhanced_simulation import (
+# Import base simulation components
+from complete_simulation import (
     Order, Trade, LimitOrderBook, Agent, 
     ImprovedInformedTrader, SmartNoiseTrader, BUY, SELL, LIMIT, MARKET,
     INITIAL_PRICE, MIN_PRICE, TIME_STEPS, NUM_AGENTS
@@ -51,35 +51,19 @@ class MLToxicityPredictor:
                 model_package = joblib.load(model_path)
             except Exception as e:
                 print(f"Failed to load model package: {e}")
-                # Create fallback dummy model
-                model_package = {
-                    'models': {},
-                    'feature_selector': ['order_size', 'is_market_order', 'is_buy', 'mid_price'],
-                    'scalers': {'main': StandardScaler()},
-                    'meta_model': None,
-                    'has_meta_model': False,
-                    'n_detectors': 0
-                }
             
             self.model = model_package
             self.feature_names = model_package.get('feature_selector', ['order_size', 'is_market_order', 'is_buy', 'mid_price'])
             
             # Handle scaler
             scalers = model_package.get('scalers', {})
-            if 'main' in scalers:
-                self.scaler = scalers['main']
-            else:
-                self.scaler = StandardScaler()
-                # Fit with dummy data
-                dummy_data = np.random.randn(100, len(self.feature_names))
-                self.scaler.fit(dummy_data)
+            self.scaler = scalers['main']
             
-            print(f"✓ Model loaded successfully:")
+            print(f"Model loaded:")
             print(f"  - {model_package.get('n_detectors', 0)} detectors")
             print(f"  - {len(self.feature_names)} features")
             print(f"  - Meta-model: {'Yes' if model_package.get('has_meta_model') else 'No'}")
             
-            # Check if we have any working models
             working_models = len([m for m in model_package.get('models', {}).values() if m is not None])
             if working_models > 0:
                 self.is_ready = True
@@ -89,15 +73,7 @@ class MLToxicityPredictor:
                 self.is_ready = False
                 
         except Exception as e:
-            print(f"✗ Error loading model: {e}")
-            # Create minimal fallback
-            self.feature_names = ['order_size', 'is_market_order', 'is_buy', 'mid_price']
-            self.scaler = StandardScaler()
-            dummy_data = np.random.randn(100, len(self.feature_names))
-            self.scaler.fit(dummy_data)
-            self.model = {'models': {}, 'meta_model': None}
-            self.is_ready = False
-
+            print(f"Error loading model: {e}")
     
     def extract_order_features(self, order, market_context):
         """
@@ -1700,7 +1676,7 @@ def create_detailed_time_series(results, save_dir, timestamp):
     plt.savefig(f"{save_dir}/detailed_analysis_{timestamp}.png", dpi=300, bbox_inches='tight')
     plt.show()
 
-def run_ml_enhanced_comparison(model_path="calibrated_toxicity_models/enhanced_toxicity_detector_20250704_004512.joblib", 
+def run_ml_enhanced_comparison(model_path="calibrated_toxicity_models/toxicity_model_20250709_232131.joblib", 
                                 n_steps=2000):
     """Main function to run the ML-enhanced market maker comparison"""
     
@@ -1818,7 +1794,7 @@ def run_ml_enhanced_comparison(model_path="calibrated_toxicity_models/enhanced_t
     # Example usage
 if __name__ == "__main__":
     # Run the comparison study
-    model_path = "calibrated_toxicity_models/enhanced_toxicity_detector_20250704_004512.joblib"
+    model_path = "calibrated_toxicity_models/toxicity_model_20250709_232131.joblib"
     
     try:
         print("🚀 Starting ML-Enhanced Market Maker Comparison...")
