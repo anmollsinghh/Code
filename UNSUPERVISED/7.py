@@ -24,6 +24,7 @@ import os
 import optuna
 from optuna.samplers import TPESampler
 
+
 class MarketDataFeatureEngineer:
     """Feature engineering with advanced toxicity detection patterns"""
     
@@ -69,11 +70,12 @@ class MarketDataFeatureEngineer:
         return orders_df, lob_df, trades_df
     
     def extract_features(self, orders_df, lob_df, trades_df):
-        """Extract features for toxicity detection"""
-        print("Extracting public market features...")
+        """Extract comprehensive features for toxicity detection"""
+        print("Extracting comprehensive market features...")
         
         features_df = pd.DataFrame(index=orders_df.index)
         
+        # ========== EXISTING FEATURES (keep as is) ==========
         # Basic order characteristics
         features_df['order_size'] = orders_df['quantity']
         features_df['log_order_size'] = np.log1p(orders_df['quantity'])
@@ -94,59 +96,288 @@ class MarketDataFeatureEngineer:
         features_df['extreme_order'] = (orders_df['quantity'] >= size_quantiles.iloc[2]).astype(int)
         features_df['massive_order'] = (orders_df['quantity'] >= size_quantiles.iloc[3]).astype(int)
         
-        # Price-related features
+        # ========== NEW COMPREHENSIVE FEATURES ==========
+        
+        # 1. Enhanced Price and Spread Features
+        features_df = self._extract_price_features(features_df, orders_df, lob_df)
+        
+        # 2. Advanced Order Book Depth Features
+        features_df = self._extract_depth_features(features_df, lob_df, orders_df)
+        
+        # 3. Comprehensive Timing Features
+        features_df = self._extract_timing_features(features_df, orders_df)
+        
+        # 4. Market Microstructure Features
+        features_df = self._extract_microstructure_features(features_df, orders_df)
+        
+        # 5. Order Flow Intensity Features
+        features_df = self._extract_flow_intensity_features(features_df, orders_df)
+        
+        # 6. Size Distribution Features
+        features_df = self._extract_size_distribution_features(features_df, orders_df)
+        
+        # 7. Price Impact Features
+        features_df = self._extract_price_impact_features(features_df, orders_df, trades_df)
+        
+        # 8. LOB features (enhanced)
+        if not lob_df.empty:
+            lob_features = self._extract_lob_features(lob_df, orders_df)
+            for col in lob_features.columns:
+                if col not in features_df.columns:
+                    features_df[col] = lob_features[col]
+        
+        # 9. Trade features (enhanced)
+        if not trades_df.empty:
+            trade_features = self._extract_trade_features(trades_df, orders_df)
+            for col in trade_features.columns:
+                if col not in features_df.columns:
+                    features_df[col] = trade_features[col]
+        
+        # 10. Advanced Pattern Detection
+        features_df = self._extract_pattern_features(features_df, orders_df)
+        
+        # 11. Regime Detection Features
+        features_df = self._extract_regime_features(features_df)
+        
+        # 12. Technical Indicators
+        features_df = self._extract_technical_indicators(features_df)
+        
+        # 13. Anomaly Detection Features
+        features_df = self._extract_anomaly_features(features_df)
+        
+        # 14. Network and Clustering Features
+        features_df = self._extract_network_features(features_df, orders_df)
+        
+        # 15. Sequential pattern features (enhanced)
+        features_df = self._add_sequential_patterns(features_df)
+        
+        # 16. Market impact features (enhanced)
+        features_df = self._add_market_impact_features(features_df)
+        
+        # 17. Rolling features for key variables (enhanced)
+        features_df = self._add_rolling_features(features_df)
+        
+        # 18. Interaction features (enhanced)
+        features_df = self._add_interaction_features(features_df)
+        
+        # Clean up
+        features_df = features_df.fillna(0).replace([np.inf, -np.inf], 0)
+        self.feature_names = features_df.columns.tolist()
+        
+        print(f"Generated {len(self.feature_names)} comprehensive market features")
+        return features_df
+
+    def _extract_price_features(self, features_df, orders_df, lob_df):
+        """Extract enhanced price-related features"""
         if 'mid_price' in orders_df.columns:
             mid_price = orders_df['mid_price']
             features_df['mid_price'] = mid_price
-            features_df['log_mid_price'] = np.log(mid_price)
+            features_df['log_mid_price'] = np.log(mid_price + 1e-8)
             features_df['mid_price_change'] = mid_price.diff().fillna(0)
             features_df['mid_price_returns'] = mid_price.pct_change().fillna(0)
             
-            # Price momentum and trend
-            for window in [5, 10, 20]:
+            # Price velocity and acceleration
+            features_df['price_velocity'] = mid_price.diff().fillna(0)
+            features_df['price_acceleration'] = features_df['price_velocity'].diff().fillna(0)
+            
+            # Price momentum for multiple windows
+            for window in [3, 5, 10, 20, 50]:
                 features_df[f'price_ma_{window}'] = mid_price.rolling(window, min_periods=1).mean()
-                features_df[f'price_trend_{window}'] = (mid_price - features_df[f'price_ma_{window}']) / features_df[f'price_ma_{window}']
+                features_df[f'price_trend_{window}'] = (mid_price - features_df[f'price_ma_{window}']) / (features_df[f'price_ma_{window}'] + 1e-8)
+                features_df[f'price_momentum_{window}'] = mid_price.rolling(window, min_periods=1).apply(lambda x: x.iloc[-1] - x.iloc[0] if len(x) > 1 else 0, raw=False)
+            
+            # Price volatility measures
+            for window in [5, 10, 20]:
+                features_df[f'price_volatility_{window}'] = features_df['mid_price_returns'].rolling(window, min_periods=1).std()
+                features_df[f'price_range_{window}'] = (mid_price.rolling(window, min_periods=1).max() - mid_price.rolling(window, min_periods=1).min()) / mid_price.rolling(window, min_periods=1).mean()
             
             # Price relative to order
             if 'price' in orders_df.columns:
                 order_price = orders_df['price'].fillna(mid_price)
-                features_df['price_deviation'] = (order_price - mid_price) / mid_price
+                features_df['price_deviation'] = (order_price - mid_price) / (mid_price + 1e-8)
                 features_df['abs_price_deviation'] = np.abs(features_df['price_deviation'])
                 features_df['price_aggressiveness'] = np.where(
                     orders_df['side'] == 'BUY',
-                    np.maximum(0, (order_price - mid_price) / mid_price),
-                    np.maximum(0, (mid_price - order_price) / mid_price)
+                    np.maximum(0, (order_price - mid_price) / (mid_price + 1e-8)),
+                    np.maximum(0, (mid_price - order_price) / (mid_price + 1e-8))
                 )
+                
+                # Distance from mid in basis points
+                features_df['distance_from_mid_bps'] = np.abs(order_price - mid_price) / (mid_price + 1e-8) * 10000
         
-        # Spread features
+        # Spread features (enhanced)
         if 'spread' in orders_df.columns:
             spread = orders_df['spread']
             features_df['spread'] = spread
             features_df['log_spread'] = np.log1p(spread)
+            features_df['spread_percentile'] = spread.rank(pct=True)
+            
             if 'mid_price' in orders_df.columns:
-                features_df['relative_spread'] = spread / mid_price
+                features_df['relative_spread'] = spread / (mid_price + 1e-8)
+                features_df['relative_spread_bps'] = features_df['relative_spread'] * 10000
             
             # Rolling spread statistics
-            for window in [5, 10, 20]:
+            for window in [3, 5, 10, 20]:
                 features_df[f'spread_ma_{window}'] = spread.rolling(window, min_periods=1).mean()
                 features_df[f'spread_std_{window}'] = spread.rolling(window, min_periods=1).std()
+                features_df[f'spread_min_{window}'] = spread.rolling(window, min_periods=1).min()
+                features_df[f'spread_max_{window}'] = spread.rolling(window, min_periods=1).max()
+                features_df[f'spread_range_{window}'] = features_df[f'spread_max_{window}'] - features_df[f'spread_min_{window}']
+            
+            # Spread volatility and persistence
+            features_df['spread_volatility_5'] = spread.rolling(5, min_periods=1).std()
+            features_df['spread_change'] = spread.diff().fillna(0)
+            features_df['spread_acceleration'] = features_df['spread_change'].diff().fillna(0)
         
-        # Timing features
+        return features_df
+
+    def _extract_depth_features(self, features_df, lob_df, orders_df):
+        """Extract comprehensive order book depth features"""
+        if lob_df.empty:
+            return features_df
+        
+        # Merge LOB data with orders
+        if 'timestamp' in lob_df.columns and 'timestamp' in orders_df.columns:
+            merged = pd.merge_asof(
+                orders_df[['timestamp']].reset_index(),
+                lob_df,
+                on='timestamp',
+                direction='backward'
+            ).set_index('index')
+            
+            # Multi-level depth analysis
+            bid_depths = []
+            ask_depths = []
+            bid_prices = []
+            ask_prices = []
+            
+            for level in range(1, 6):
+                bid_size_col = f'bid_size_{level}'
+                ask_size_col = f'ask_size_{level}'
+                bid_price_col = f'bid_price_{level}'
+                ask_price_col = f'ask_price_{level}'
+                
+                if all(col in merged.columns for col in [bid_size_col, ask_size_col]):
+                    bid_size = merged[bid_size_col].fillna(0)
+                    ask_size = merged[ask_size_col].fillna(0)
+                    
+                    bid_depths.append(bid_size)
+                    ask_depths.append(ask_size)
+                    
+                    # Level-specific features
+                    features_df[f'bid_depth_L{level}'] = bid_size
+                    features_df[f'ask_depth_L{level}'] = ask_size
+                    features_df[f'depth_imbalance_L{level}'] = (bid_size - ask_size) / (bid_size + ask_size + 1e-8)
+                    features_df[f'depth_ratio_L{level}'] = bid_size / (ask_size + 1e-8)
+                    
+                    # Price level features
+                    if bid_price_col in merged.columns and ask_price_col in merged.columns:
+                        bid_price = merged[bid_price_col].fillna(0)
+                        ask_price = merged[ask_price_col].fillna(0)
+                        
+                        bid_prices.append(bid_price)
+                        ask_prices.append(ask_price)
+                        
+                        features_df[f'bid_price_L{level}'] = bid_price
+                        features_df[f'ask_price_L{level}'] = ask_price
+            
+            # Aggregate depth features
+            if bid_depths and ask_depths:
+                total_bid_depth = sum(bid_depths)
+                total_ask_depth = sum(ask_depths)
+                
+                features_df['total_bid_depth'] = total_bid_depth
+                features_df['total_ask_depth'] = total_ask_depth
+                features_df['total_depth'] = total_bid_depth + total_ask_depth
+                features_df['depth_imbalance'] = (total_bid_depth - total_ask_depth) / (total_bid_depth + total_ask_depth + 1e-8)
+                features_df['depth_ratio'] = total_bid_depth / (total_ask_depth + 1e-8)
+                
+                # Depth concentration and distribution
+                features_df['depth_concentration_L1'] = (bid_depths[0] + ask_depths[0]) / (total_bid_depth + total_ask_depth + 1e-8)
+                features_df['depth_concentration_L12'] = (bid_depths[0] + ask_depths[0] + bid_depths[1] + ask_depths[1]) / (total_bid_depth + total_ask_depth + 1e-8)
+                
+                # Depth variance across levels
+                if len(bid_depths) > 1:
+                    bid_depth_array = np.array(bid_depths)
+                    ask_depth_array = np.array(ask_depths)
+                    features_df['bid_depth_variance'] = np.var(bid_depth_array, axis=0)
+                    features_df['ask_depth_variance'] = np.var(ask_depth_array, axis=0)
+                    features_df['depth_skewness'] = features_df['bid_depth_variance'] - features_df['ask_depth_variance']
+            
+            # Price slope analysis
+            if bid_prices and ask_prices and len(bid_prices) > 1:
+                # Calculate price slopes across levels
+                bid_price_array = np.array(bid_prices)
+                ask_price_array = np.array(ask_prices)
+                
+                # Slope from L1 to L2
+                features_df['bid_price_slope_L1L2'] = bid_price_array[1] - bid_price_array[0]
+                features_df['ask_price_slope_L1L2'] = ask_price_array[1] - ask_price_array[0]
+                
+                # Average slope across all levels
+                bid_slopes = np.diff(bid_price_array, axis=0)
+                ask_slopes = np.diff(ask_price_array, axis=0)
+                features_df['bid_price_slope_avg'] = np.mean(bid_slopes, axis=0)
+                features_df['ask_price_slope_avg'] = np.mean(ask_slopes, axis=0)
+        
+        return features_df
+
+    def _extract_timing_features(self, features_df, orders_df):
+        """Extract comprehensive timing and arrival features"""
         if 'timestamp' in orders_df.columns:
             timestamps = pd.to_datetime(orders_df['timestamp']) if not pd.api.types.is_datetime64_any_dtype(orders_df['timestamp']) else orders_df['timestamp']
             
-            # Inter-arrival times
-            time_diffs = timestamps.diff().dt.total_seconds().fillna(1) if hasattr(timestamps.iloc[0], 'hour') else pd.Series(range(len(timestamps))).diff().fillna(1)
-            features_df['inter_arrival_time'] = time_diffs
-            features_df['log_inter_arrival_time'] = np.log1p(time_diffs)
-            features_df['arrival_rate'] = 1 / (time_diffs + 1e-8)
+            # Basic timing features
+            if hasattr(timestamps.iloc[0], 'hour'):
+                # Inter-arrival times
+                time_diffs = timestamps.diff().dt.total_seconds().fillna(1)
+                features_df['inter_arrival_time'] = time_diffs
+                features_df['log_inter_arrival_time'] = np.log1p(time_diffs)
+                features_df['arrival_rate'] = 1 / (time_diffs + 1e-8)
+                
+                # Time of day features
+                features_df['hour_of_day'] = timestamps.dt.hour
+                features_df['minute_of_hour'] = timestamps.dt.minute
+                features_df['second_of_minute'] = timestamps.dt.second
+                
+                # Periodic features
+                features_df['hour_sin'] = np.sin(2 * np.pi * features_df['hour_of_day'] / 24)
+                features_df['hour_cos'] = np.cos(2 * np.pi * features_df['hour_of_day'] / 24)
+                features_df['minute_sin'] = np.sin(2 * np.pi * features_df['minute_of_hour'] / 60)
+                features_df['minute_cos'] = np.cos(2 * np.pi * features_df['minute_of_hour'] / 60)
+                
+            else:
+                # Sequence-based timing
+                time_diffs = pd.Series(range(len(timestamps))).diff().fillna(1)
+                features_df['inter_arrival_time'] = time_diffs
+                features_df['log_inter_arrival_time'] = np.log1p(time_diffs)
+                features_df['arrival_rate'] = 1 / (time_diffs + 1e-8)
             
             # Arrival intensity patterns
-            for window in [5, 10, 20, 50]:
+            for window in [3, 5, 10, 20, 50]:
                 features_df[f'arrival_intensity_{window}'] = features_df['arrival_rate'].rolling(window, min_periods=1).mean()
                 features_df[f'arrival_volatility_{window}'] = features_df['arrival_rate'].rolling(window, min_periods=1).std()
+                features_df[f'arrival_min_{window}'] = features_df['arrival_rate'].rolling(window, min_periods=1).min()
+                features_df[f'arrival_max_{window}'] = features_df['arrival_rate'].rolling(window, min_periods=1).max()
+            
+            # Arrival burst detection
+            arrival_ma = features_df['arrival_rate'].rolling(10, min_periods=1).mean()
+            arrival_std = features_df['arrival_rate'].rolling(10, min_periods=1).std()
+            features_df['arrival_burst'] = ((features_df['arrival_rate'] - arrival_ma) > 2 * arrival_std).astype(int)
+            features_df['arrival_burst_intensity'] = (features_df['arrival_rate'] - arrival_ma) / (arrival_std + 1e-8)
+            
+            # Time clustering measures
+            features_df['time_clustering_5'] = features_df['inter_arrival_time'].rolling(5, min_periods=1).std()
+            features_df['time_clustering_10'] = features_df['inter_arrival_time'].rolling(10, min_periods=1).std()
+            
+            # Arrival acceleration
+            features_df['arrival_acceleration'] = features_df['arrival_rate'].diff().fillna(0)
         
-        # Market microstructure features
+        return features_df
+
+    def _extract_microstructure_features(self, features_df, orders_df):
+        """Extract market microstructure features"""
+        # Volatility features
         if 'volatility' in orders_df.columns:
             vol = orders_df['volatility']
             features_df['volatility'] = vol
@@ -154,56 +385,625 @@ class MarketDataFeatureEngineer:
             features_df['vol_percentile'] = vol.rank(pct=True)
             
             # Volatility regimes
-            vol_quantiles = vol.quantile([0.33, 0.67, 0.9])
+            vol_quantiles = vol.quantile([0.25, 0.5, 0.75, 0.9, 0.95])
             features_df['low_vol_regime'] = (vol <= vol_quantiles.iloc[0]).astype(int)
-            features_df['high_vol_regime'] = (vol >= vol_quantiles.iloc[1]).astype(int)
-            features_df['extreme_vol_regime'] = (vol >= vol_quantiles.iloc[2]).astype(int)
+            features_df['med_vol_regime'] = ((vol > vol_quantiles.iloc[0]) & (vol <= vol_quantiles.iloc[2])).astype(int)
+            features_df['high_vol_regime'] = (vol >= vol_quantiles.iloc[2]).astype(int)
+            features_df['extreme_vol_regime'] = (vol >= vol_quantiles.iloc[4]).astype(int)
+            
+            # Volatility dynamics
+            features_df['vol_change'] = vol.diff().fillna(0)
+            features_df['vol_acceleration'] = features_df['vol_change'].diff().fillna(0)
+            
+            # Rolling volatility statistics
+            for window in [5, 10, 20]:
+                features_df[f'vol_ma_{window}'] = vol.rolling(window, min_periods=1).mean()
+                features_df[f'vol_std_{window}'] = vol.rolling(window, min_periods=1).std()
+                features_df[f'vol_trend_{window}'] = (vol - features_df[f'vol_ma_{window}']) / (features_df[f'vol_ma_{window}'] + 1e-8)
         
+        # Momentum features
         if 'momentum' in orders_df.columns:
             mom = orders_df['momentum']
             features_df['momentum'] = mom
             features_df['abs_momentum'] = np.abs(mom)
             features_df['momentum_sign'] = np.sign(mom)
             features_df['momentum_squared'] = mom ** 2
+            
+            # Momentum persistence
+            features_df['momentum_persistence_5'] = mom.rolling(5, min_periods=1).apply(lambda x: (x > 0).sum() / len(x), raw=False)
+            features_df['momentum_persistence_10'] = mom.rolling(10, min_periods=1).apply(lambda x: (x > 0).sum() / len(x), raw=False)
+            
+            # Momentum acceleration
+            features_df['momentum_change'] = mom.diff().fillna(0)
+            features_df['momentum_acceleration'] = features_df['momentum_change'].diff().fillna(0)
         
+        # Order book imbalance features
         if 'order_book_imbalance' in orders_df.columns:
             imbalance = orders_df['order_book_imbalance']
             features_df['imbalance'] = imbalance
             features_df['abs_imbalance'] = np.abs(imbalance)
             features_df['imbalance_sign'] = np.sign(imbalance)
             features_df['imbalance_percentile'] = imbalance.rank(pct=True)
+            
+            # Imbalance persistence
+            features_df['imbalance_persistence_5'] = imbalance.rolling(5, min_periods=1).apply(lambda x: (x > 0).sum() / len(x), raw=False)
+            features_df['imbalance_persistence_10'] = imbalance.rolling(10, min_periods=1).apply(lambda x: (x > 0).sum() / len(x), raw=False)
+            
+            # Imbalance dynamics
+            features_df['imbalance_change'] = imbalance.diff().fillna(0)
+            features_df['imbalance_acceleration'] = features_df['imbalance_change'].diff().fillna(0)
+            
+            # Imbalance extremes
+            imbalance_quantiles = imbalance.quantile([0.05, 0.95])
+            features_df['extreme_imbalance'] = ((imbalance <= imbalance_quantiles.iloc[0]) | 
+                                            (imbalance >= imbalance_quantiles.iloc[1])).astype(int)
         
-        # LOB features
-        if not lob_df.empty:
-            lob_features = self._extract_lob_features(lob_df, orders_df)
-            for col in lob_features.columns:
-                if col not in features_df.columns:
-                    features_df[col] = lob_features[col]
+        return features_df
+
+    def _extract_flow_intensity_features(self, features_df, orders_df):
+        """Extract order flow intensity features"""
+        # Order aggressiveness
+        if 'is_aggressive' in orders_df.columns:
+            aggressive = orders_df['is_aggressive'].astype(int)
+            features_df['is_aggressive'] = aggressive
+            
+            # Aggressiveness patterns
+            for window in [5, 10, 20]:
+                features_df[f'aggressive_ratio_{window}'] = aggressive.rolling(window, min_periods=1).mean()
+                features_df[f'aggressive_count_{window}'] = aggressive.rolling(window, min_periods=1).sum()
         
-        # Trade features
-        if not trades_df.empty:
-            trade_features = self._extract_trade_features(trades_df, orders_df)
-            for col in trade_features.columns:
-                if col not in features_df.columns:
-                    features_df[col] = trade_features[col]
+        # Order execution patterns
+        if 'resulted_in_trade' in orders_df.columns:
+            executed = orders_df['resulted_in_trade'].astype(int)
+            features_df['resulted_in_trade'] = executed
+            
+            # Execution patterns
+            for window in [5, 10, 20]:
+                features_df[f'execution_ratio_{window}'] = executed.rolling(window, min_periods=1).mean()
+                features_df[f'execution_count_{window}'] = executed.rolling(window, min_periods=1).sum()
         
-        # Sequential pattern features
-        features_df = self._add_sequential_patterns(features_df)
+        # Market vs limit order patterns
+        if 'is_market_order' in features_df.columns:
+            market_orders = features_df['is_market_order']
+            for window in [5, 10, 20]:
+                features_df[f'market_order_ratio_{window}'] = market_orders.rolling(window, min_periods=1).mean()
+                features_df[f'market_order_count_{window}'] = market_orders.rolling(window, min_periods=1).sum()
         
-        # Market impact features
-        features_df = self._add_market_impact_features(features_df)
+        # Buy/sell flow patterns
+        if 'is_buy' in features_df.columns and 'is_sell' in features_df.columns:
+            buy_flow = features_df['is_buy']
+            sell_flow = features_df['is_sell']
+            
+            for window in [5, 10, 20]:
+                features_df[f'buy_ratio_{window}'] = buy_flow.rolling(window, min_periods=1).mean()
+                features_df[f'sell_ratio_{window}'] = sell_flow.rolling(window, min_periods=1).mean()
+                features_df[f'buy_sell_imbalance_{window}'] = (buy_flow.rolling(window, min_periods=1).sum() - 
+                                                            sell_flow.rolling(window, min_periods=1).sum())
         
-        # Rolling features for key variables
-        features_df = self._add_rolling_features(features_df)
+        return features_df
+
+    def _extract_size_distribution_features(self, features_df, orders_df):
+        """Extract order size distribution features"""
+        if 'order_size' in features_df.columns:
+            size = features_df['order_size']
+            
+            # Size distribution statistics
+            for window in [5, 10, 20, 50]:
+                features_df[f'size_mean_{window}'] = size.rolling(window, min_periods=1).mean()
+                features_df[f'size_std_{window}'] = size.rolling(window, min_periods=1).std()
+                features_df[f'size_min_{window}'] = size.rolling(window, min_periods=1).min()
+                features_df[f'size_max_{window}'] = size.rolling(window, min_periods=1).max()
+                features_df[f'size_range_{window}'] = features_df[f'size_max_{window}'] - features_df[f'size_min_{window}']
+                
+                # Size percentiles
+                features_df[f'size_median_{window}'] = size.rolling(window, min_periods=1).median()
+                features_df[f'size_q25_{window}'] = size.rolling(window, min_periods=1).quantile(0.25)
+                features_df[f'size_q75_{window}'] = size.rolling(window, min_periods=1).quantile(0.75)
+                features_df[f'size_iqr_{window}'] = features_df[f'size_q75_{window}'] - features_df[f'size_q25_{window}']
+                
+                # Size skewness and kurtosis
+                features_df[f'size_skew_{window}'] = size.rolling(window, min_periods=3).skew()
+                features_df[f'size_kurtosis_{window}'] = size.rolling(window, min_periods=4).kurt()
+            
+            # Size concentration measures
+            features_df['size_concentration_5'] = size.rolling(5, min_periods=1).apply(lambda x: (x.max() - x.min()) / (x.mean() + 1e-8), raw=False)
+            features_df['size_concentration_10'] = size.rolling(10, min_periods=1).apply(lambda x: (x.max() - x.min()) / (x.mean() + 1e-8), raw=False)
+            
+            # Size consistency
+            features_df['size_consistency_5'] = size.rolling(5, min_periods=1).apply(lambda x: 1 - (x.std() / (x.mean() + 1e-8)), raw=False)
+            features_df['size_consistency_10'] = size.rolling(10, min_periods=1).apply(lambda x: 1 - (x.std() / (x.mean() + 1e-8)), raw=False)
         
-        # Interaction features
-        features_df = self._add_interaction_features(features_df)
+        return features_df
+
+    def _extract_price_impact_features(self, features_df, orders_df, trades_df):
+        """Extract price impact features"""
+        if 'mid_price_change' in features_df.columns and 'order_size' in features_df.columns:
+            # Basic price impact
+            features_df['impact_per_size'] = features_df['mid_price_change'] / (features_df['order_size'] + 1e-8)
+            features_df['abs_impact_per_size'] = np.abs(features_df['impact_per_size'])
+            
+            # Impact efficiency
+            features_df['impact_efficiency'] = features_df['impact_per_size'] / (features_df['order_size'] + 1e-8)
+            
+            # Cumulative impact
+            features_df['cumulative_impact_5'] = features_df['impact_per_size'].rolling(5, min_periods=1).sum()
+            features_df['cumulative_impact_10'] = features_df['impact_per_size'].rolling(10, min_periods=1).sum()
+            
+            # Impact volatility
+            features_df['impact_volatility_5'] = features_df['impact_per_size'].rolling(5, min_periods=1).std()
+            features_df['impact_volatility_10'] = features_df['impact_per_size'].rolling(10, min_periods=1).std()
+            
+            # Abnormal impact detection
+            impact_ma = features_df['impact_per_size'].rolling(20, min_periods=1).mean()
+            impact_std = features_df['impact_per_size'].rolling(20, min_periods=1).std()
+            features_df['abnormal_impact'] = (np.abs(features_df['impact_per_size'] - impact_ma) > 2 * impact_std).astype(int)
+            features_df['impact_zscore'] = (features_df['impact_per_size'] - impact_ma) / (impact_std + 1e-8)
+            
+            # Kyle's lambda estimation (simplified approach)
+            print("Calculating Kyle's lambda features...")
+            
+            # Get the data as numpy arrays
+            prices = features_df['mid_price_change'].values
+            sizes = features_df['order_size'].values
+            
+            for window in [10, 20, 50]:
+                lambda_values = []
+                
+                for i in range(len(prices)):
+                    start_idx = max(0, i - window + 1)
+                    end_idx = i + 1
+                    
+                    if end_idx - start_idx >= 3:  # Need at least 3 data points
+                        try:
+                            window_prices = prices[start_idx:end_idx]
+                            window_sizes = sizes[start_idx:end_idx]
+                            
+                            # Calculate Kyle's lambda
+                            size_var = np.var(window_sizes)
+                            if size_var > 1e-8:  # Avoid division by zero
+                                covariance = np.cov(window_prices, window_sizes)[0, 1]
+                                lambda_val = covariance / size_var
+                                lambda_values.append(lambda_val if not np.isnan(lambda_val) else 0)
+                            else:
+                                lambda_values.append(0)
+                        except:
+                            lambda_values.append(0)
+                    else:
+                        lambda_values.append(0)
+                
+                # Add to features dataframe
+                features_df[f'kyle_lambda_{window}'] = lambda_values
         
-        # Clean up
-        features_df = features_df.fillna(0).replace([np.inf, -np.inf], 0)
-        self.feature_names = features_df.columns.tolist()
+        else:
+            print("Warning: mid_price_change or order_size not found, skipping price impact features")
         
-        print(f"Generated {len(self.feature_names)} public market features")
+        return features_df
+
+    def _extract_pattern_features(self, features_df, orders_df):
+        """Extract sequential pattern and manipulation detection features"""
+        if 'order_size' in features_df.columns:
+            # Size acceleration patterns
+            size_diff = features_df['order_size'].diff()
+            size_accel = size_diff.diff()
+            features_df['size_acceleration'] = size_accel
+            features_df['size_momentum_burst'] = (size_accel > size_accel.quantile(0.95)).astype(int)
+            
+            # Consecutive pattern detection
+            large_order_threshold = features_df['order_size'].quantile(0.9)
+            is_large = (features_df['order_size'] > large_order_threshold).astype(int)
+            features_df['consecutive_large_orders'] = is_large.rolling(3, min_periods=1).sum()
+            features_df['consecutive_large_orders_5'] = is_large.rolling(5, min_periods=1).sum()
+            
+            # Size clustering detection
+            features_df['size_cluster_indicator'] = (features_df['order_size'].rolling(3, min_periods=1).std() < 
+                                                features_df['order_size'].rolling(10, min_periods=1).std() * 0.5).astype(int)
+        
+        # Directional clustering
+        if 'is_buy' in features_df.columns and 'is_sell' in features_df.columns:
+            buy_signal = features_df['is_buy']
+            sell_signal = features_df['is_sell']
+            
+            # Consecutive directional orders
+            features_df['consecutive_buys'] = buy_signal.rolling(5, min_periods=1).sum()
+            features_df['consecutive_sells'] = sell_signal.rolling(5, min_periods=1).sum()
+            
+            # Directional momentum
+            direction_signal = buy_signal - sell_signal
+            features_df['direction_momentum_3'] = direction_signal.rolling(3, min_periods=1).sum()
+            features_df['direction_momentum_5'] = direction_signal.rolling(5, min_periods=1).sum()
+            features_df['direction_momentum_10'] = direction_signal.rolling(10, min_periods=1).sum()
+            
+            # Direction persistence
+            features_df['direction_persistence_5'] = direction_signal.rolling(5, min_periods=1).apply(lambda x: (x > 0).sum() / len(x), raw=False)
+            features_df['direction_persistence_10'] = direction_signal.rolling(10, min_periods=1).apply(lambda x: (x > 0).sum() / len(x), raw=False)
+        
+        # Timing pattern detection
+        if 'arrival_rate' in features_df.columns:
+            arrival_rate = features_df['arrival_rate']
+            
+            # Arrival burst detection
+            arrival_ma = arrival_rate.rolling(10, min_periods=1).mean()
+            arrival_std = arrival_rate.rolling(10, min_periods=1).std()
+            features_df['arrival_burst'] = ((arrival_rate - arrival_ma) > 2 * arrival_std).astype(int)
+            features_df['arrival_burst_intensity'] = (arrival_rate - arrival_ma) / (arrival_std + 1e-8)
+            
+            # Arrival clustering
+            features_df['arrival_clustering_5'] = arrival_rate.rolling(5, min_periods=1).std() / (arrival_rate.rolling(5, min_periods=1).mean() + 1e-8)
+            features_df['arrival_clustering_10'] = arrival_rate.rolling(10, min_periods=1).std() / (arrival_rate.rolling(10, min_periods=1).mean() + 1e-8)
+        
+        return features_df
+
+    def _extract_regime_features(self, features_df):
+        """Extract regime detection features"""
+        # Volatility regime detection
+        if 'volatility' in features_df.columns:
+            vol = features_df['volatility']
+            vol_ma_short = vol.rolling(5, min_periods=1).mean()
+            vol_ma_long = vol.rolling(20, min_periods=1).mean()
+            
+            features_df['vol_regime_trend'] = (vol_ma_short - vol_ma_long) / (vol_ma_long + 1e-8)
+            features_df['vol_regime_breakout'] = (vol > vol.rolling(20, min_periods=1).quantile(0.95)).astype(int)
+            features_df['vol_regime_breakdown'] = (vol < vol.rolling(20, min_periods=1).quantile(0.05)).astype(int)
+        
+        # Spread regime detection
+        if 'spread' in features_df.columns:
+            spread = features_df['spread']
+            spread_ma = spread.rolling(10, min_periods=1).mean()
+            spread_std = spread.rolling(10, min_periods=1).std()
+            
+            features_df['spread_regime_wide'] = (spread > spread_ma + 2 * spread_std).astype(int)
+            features_df['spread_regime_tight'] = (spread < spread_ma - spread_std).astype(int)
+            features_df['spread_regime_normal'] = ((spread >= spread_ma - spread_std) & 
+                                                (spread <= spread_ma + 2 * spread_std)).astype(int)
+        
+        # Activity regime detection
+        if 'arrival_rate' in features_df.columns:
+            arrival_rate = features_df['arrival_rate']
+            
+            # Calculate quantiles separately
+            arrival_q33 = arrival_rate.rolling(50, min_periods=1).quantile(0.33)
+            arrival_q67 = arrival_rate.rolling(50, min_periods=1).quantile(0.67)
+            
+            features_df['activity_regime_low'] = (arrival_rate <= arrival_q33).astype(int)
+            features_df['activity_regime_high'] = (arrival_rate >= arrival_q67).astype(int)
+            features_df['activity_regime_normal'] = ((arrival_rate > arrival_q33) & 
+                                                (arrival_rate < arrival_q67)).astype(int)
+        
+        return features_df
+
+    def _extract_technical_indicators(self, features_df):
+        """Extract technical indicators adapted for microstructure"""
+        # RSI for order flow
+        if 'is_buy' in features_df.columns and 'is_sell' in features_df.columns:
+            direction = features_df['is_buy'] - features_df['is_sell']
+            
+            def calculate_rsi(series, window=14):
+                delta = series.diff()
+                gain = (delta.where(delta > 0, 0)).rolling(window, min_periods=1).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(window, min_periods=1).mean()
+                rs = gain / (loss + 1e-8)
+                rsi = 100 - (100 / (1 + rs))
+                return rsi
+            
+            features_df['flow_rsi_14'] = calculate_rsi(direction, 14)
+            features_df['flow_rsi_7'] = calculate_rsi(direction, 7)
+        
+        # MACD for price momentum
+        if 'mid_price' in features_df.columns:
+            price = features_df['mid_price']
+            
+            # MACD components
+            ema_12 = price.ewm(span=12, min_periods=1).mean()
+            ema_26 = price.ewm(span=26, min_periods=1).mean()
+            macd_line = ema_12 - ema_26
+            signal_line = macd_line.ewm(span=9, min_periods=1).mean()
+            
+            features_df['macd_line'] = macd_line
+            features_df['macd_signal'] = signal_line
+            features_df['macd_histogram'] = macd_line - signal_line
+            features_df['macd_crossover'] = ((macd_line > signal_line) & (macd_line.shift(1) <= signal_line.shift(1))).astype(int)
+        
+        # Bollinger Bands for volatility
+        if 'mid_price' in features_df.columns:
+            price = features_df['mid_price']
+            
+            for window in [10, 20]:
+                sma = price.rolling(window, min_periods=1).mean()
+                std = price.rolling(window, min_periods=1).std()
+                
+                features_df[f'bb_upper_{window}'] = sma + (std * 2)
+                features_df[f'bb_lower_{window}'] = sma - (std * 2)
+                features_df[f'bb_width_{window}'] = (features_df[f'bb_upper_{window}'] - features_df[f'bb_lower_{window}']) / sma
+                features_df[f'bb_position_{window}'] = (price - features_df[f'bb_lower_{window}']) / (features_df[f'bb_upper_{window}'] - features_df[f'bb_lower_{window}'])
+        
+        # Volume oscillator
+        if 'order_size' in features_df.columns:
+            volume = features_df['order_size']
+            
+            vol_ma_short = volume.rolling(5, min_periods=1).mean()
+            vol_ma_long = volume.rolling(20, min_periods=1).mean()
+            
+            features_df['volume_oscillator'] = (vol_ma_short - vol_ma_long) / vol_ma_long
+            features_df['volume_momentum'] = volume.rolling(10, min_periods=1).apply(lambda x: (x.iloc[-1] - x.iloc[0]) / (x.iloc[0] + 1e-8), raw=False)
+        
+        return features_df
+
+    def _extract_anomaly_features(self, features_df):
+        """Extract anomaly detection features"""
+        # Statistical outlier detection
+        numerical_columns = ['order_size', 'spread', 'arrival_rate', 'volatility', 'momentum']
+        available_columns = [col for col in numerical_columns if col in features_df.columns]
+        
+        for col in available_columns:
+            series = features_df[col]
+            
+            # Z-score based outliers
+            rolling_mean = series.rolling(20, min_periods=1).mean()
+            rolling_std = series.rolling(20, min_periods=1).std()
+            z_scores = (series - rolling_mean) / (rolling_std + 1e-8)
+            
+            features_df[f'{col}_zscore'] = z_scores
+            features_df[f'{col}_outlier_2std'] = (np.abs(z_scores) > 2).astype(int)
+            features_df[f'{col}_outlier_3std'] = (np.abs(z_scores) > 3).astype(int)
+            
+            # IQR based outliers
+            rolling_q25 = series.rolling(20, min_periods=1).quantile(0.25)
+            rolling_q75 = series.rolling(20, min_periods=1).quantile(0.75)
+            iqr = rolling_q75 - rolling_q25
+            
+            features_df[f'{col}_outlier_iqr'] = ((series < rolling_q25 - 1.5 * iqr) | 
+                                            (series > rolling_q75 + 1.5 * iqr)).astype(int)
+        
+        # Simplified multivariate anomaly detection
+        if len(available_columns) >= 2:
+            print("Calculating Mahalanobis distance features...")
+            
+            # Get feature matrix
+            feature_matrix = features_df[available_columns].fillna(0).values
+            n_samples = len(feature_matrix)
+            
+            # Calculate rolling Mahalanobis distance
+            mahal_distances = []
+            window = 20
+            
+            for i in range(n_samples):
+                start_idx = max(0, i - window + 1)
+                end_idx = i + 1
+                
+                if end_idx - start_idx >= 2:  # Need at least 2 samples
+                    try:
+                        window_data = feature_matrix[start_idx:end_idx]
+                        
+                        # Calculate mean and covariance
+                        mean = np.mean(window_data, axis=0)
+                        cov = np.cov(window_data.T)
+                        
+                        # Current observation
+                        current_obs = feature_matrix[i]
+                        
+                        # Calculate Mahalanobis distance
+                        if np.linalg.det(cov) != 0:
+                            inv_cov = np.linalg.inv(cov)
+                            diff = current_obs - mean
+                            mahal_dist = np.sqrt(diff.T @ inv_cov @ diff)
+                            mahal_distances.append(mahal_dist if not np.isnan(mahal_dist) else 0)
+                        else:
+                            mahal_distances.append(0)
+                    except:
+                        mahal_distances.append(0)
+                else:
+                    mahal_distances.append(0)
+            
+            # Add Mahalanobis distance feature
+            features_df['mahalanobis_distance'] = mahal_distances
+            
+            # Create outlier indicator
+            mahal_series = pd.Series(mahal_distances)
+            mahal_q95 = mahal_series.rolling(50, min_periods=1).quantile(0.95)
+            features_df['mahalanobis_outlier'] = (mahal_series > mahal_q95).astype(int)
+        
+        return features_df
+
+
+    def _extract_network_features(self, features_df, orders_df):
+        """Extract network and participant interaction features"""
+        # Agent interaction patterns (if agent info available)
+        if 'agent_id' in orders_df.columns:
+            agent_ids = orders_df['agent_id']
+            
+            # Agent activity patterns
+            for window in [10, 20, 50]:
+                features_df[f'unique_agents_{window}'] = agent_ids.rolling(window, min_periods=1).nunique()
+                features_df[f'agent_concentration_{window}'] = agent_ids.rolling(window, min_periods=1).apply(
+                    lambda x: (x.value_counts().max() / len(x)) if len(x) > 0 else 0, raw=False)
+        
+        # Order clustering in time
+        if 'timestamp' in orders_df.columns:
+            # Time-based clustering
+            features_df['time_cluster_density_5'] = features_df.index.to_series().rolling(5, min_periods=1).apply(
+                lambda x: len(x) / (max(x) - min(x) + 1) if len(x) > 1 else 1, raw=False)
+            features_df['time_cluster_density_10'] = features_df.index.to_series().rolling(10, min_periods=1).apply(
+                lambda x: len(x) / (max(x) - min(x) + 1) if len(x) > 1 else 1, raw=False)
+        
+        # Synchronization features
+        if 'is_buy' in features_df.columns and 'is_sell' in features_df.columns:
+            # Simultaneous order detection
+            features_df['simultaneous_orders'] = ((features_df['is_buy'].rolling(3, min_periods=1).sum() > 1) |
+                                                (features_df['is_sell'].rolling(3, min_periods=1).sum() > 1)).astype(int)
+            
+            # Coordination indicators
+            features_df['coordination_indicator'] = (features_df['consecutive_buys'] > 3).astype(int) | (features_df['consecutive_sells'] > 3).astype(int)
+        
+        return features_df
+
+    def _add_sequential_patterns(self, features_df):
+        """Enhanced sequential pattern detection for manipulation"""
+        if 'order_size' in features_df.columns:
+            # Size acceleration patterns
+            size_diff = features_df['order_size'].diff()
+            size_accel = size_diff.diff()
+            features_df['size_acceleration'] = size_accel
+            features_df['size_momentum_burst'] = (size_accel > size_accel.quantile(0.95)).astype(int)
+            
+            # Consecutive large order pattern
+            large_order_threshold = features_df['order_size'].quantile(0.9)
+            is_large = (features_df['order_size'] > large_order_threshold).astype(int)
+            features_df['consecutive_large_orders'] = is_large.rolling(3, min_periods=1).sum()
+            
+            # Size pattern recognition
+            features_df['size_pattern_increasing'] = (features_df['order_size'] > features_df['order_size'].shift(1)).astype(int)
+            features_df['size_pattern_decreasing'] = (features_df['order_size'] < features_df['order_size'].shift(1)).astype(int)
+            
+            # Pattern persistence
+            features_df['size_increase_streak'] = features_df['size_pattern_increasing'].rolling(10, min_periods=1).sum()
+            features_df['size_decrease_streak'] = features_df['size_pattern_decreasing'].rolling(10, min_periods=1).sum()
+        
+        # Enhanced arrival rate patterns
+        if 'arrival_rate' in features_df.columns:
+            arrival_rate = features_df['arrival_rate']
+            
+            # Arrival rate bursts
+            arrival_ma = arrival_rate.rolling(10, min_periods=1).mean()
+            arrival_std = arrival_rate.rolling(10, min_periods=1).std()
+            features_df['arrival_burst'] = ((arrival_rate - arrival_ma) > 2 * arrival_std).astype(int)
+            features_df['arrival_burst_intensity'] = (arrival_rate - arrival_ma) / (arrival_std + 1e-8)
+            
+            # Arrival rate patterns
+            features_df['arrival_acceleration'] = arrival_rate.diff().diff().fillna(0)
+            features_df['arrival_deceleration'] = (-features_df['arrival_acceleration']).clip(lower=0)
+            
+            # Pattern clustering
+            features_df['arrival_cluster_5'] = arrival_rate.rolling(5, min_periods=1).std() / (arrival_rate.rolling(5, min_periods=1).mean() + 1e-8)
+            features_df['arrival_cluster_10'] = arrival_rate.rolling(10, min_periods=1).std() / (arrival_rate.rolling(10, min_periods=1).mean() + 1e-8)
+        
+        return features_df
+
+    def _add_market_impact_features(self, features_df):
+        """Enhanced market impact and manipulation indicators"""
+        if 'mid_price_change' in features_df.columns and 'order_size' in features_df.columns:
+            # Price impact per unit size
+            features_df['impact_per_size'] = features_df['mid_price_change'] / (features_df['order_size'] + 1e-8)
+            features_df['abs_impact_per_size'] = np.abs(features_df['impact_per_size'])
+            features_df['abnormal_impact'] = (np.abs(features_df['impact_per_size']) > 
+                                            np.abs(features_df['impact_per_size']).quantile(0.95)).astype(int)
+            
+            # Impact efficiency and persistence
+            features_df['impact_efficiency'] = features_df['impact_per_size'] / (features_df['order_size'] + 1e-8)
+            features_df['impact_persistence_3'] = features_df['impact_per_size'].rolling(3, min_periods=1).sum()
+            features_df['impact_persistence_5'] = features_df['impact_per_size'].rolling(5, min_periods=1).sum()
+            
+            # Impact reversal detection
+            features_df['impact_reversal'] = ((features_df['impact_per_size'] > 0) & 
+                                            (features_df['impact_per_size'].shift(1) < 0)).astype(int) | \
+                                        ((features_df['impact_per_size'] < 0) & 
+                                            (features_df['impact_per_size'].shift(1) > 0)).astype(int)
+        
+        # Enhanced size vs volume analysis
+        if 'order_size' in features_df.columns:
+            # Size relative to recent activity
+            for window in [10, 20, 50]:
+                recent_volume = features_df['order_size'].rolling(window, min_periods=1).sum()
+                features_df[f'size_vs_recent_volume_{window}'] = features_df['order_size'] / (recent_volume + 1e-8)
+                features_df[f'dominant_order_{window}'] = (features_df[f'size_vs_recent_volume_{window}'] > 0.5).astype(int)
+            
+            # Size dominance patterns
+            features_df['size_dominance'] = features_df['order_size'] / (features_df['order_size'].rolling(20, min_periods=1).mean() + 1e-8)
+            features_df['size_dominance_extreme'] = (features_df['size_dominance'] > 3).astype(int)
+        
+        return features_df
+
+    def _add_rolling_features(self, features_df):
+        """Enhanced rolling statistical features"""
+        key_features = ['order_size', 'spread', 'volatility', 'momentum', 'arrival_rate', 'imbalance']
+        available_features = [f for f in key_features if f in features_df.columns]
+        
+        for feature in available_features:
+            series = features_df[feature]
+            
+            # Enhanced rolling windows
+            for window in [3, 5, 10, 20, 50]:
+                # Basic statistics
+                features_df[f'{feature}_ma_{window}'] = series.rolling(window, min_periods=1).mean()
+                features_df[f'{feature}_std_{window}'] = series.rolling(window, min_periods=1).std()
+                features_df[f'{feature}_min_{window}'] = series.rolling(window, min_periods=1).min()
+                features_df[f'{feature}_max_{window}'] = series.rolling(window, min_periods=1).max()
+                features_df[f'{feature}_range_{window}'] = features_df[f'{feature}_max_{window}'] - features_df[f'{feature}_min_{window}']
+                
+                # Advanced statistics
+                features_df[f'{feature}_median_{window}'] = series.rolling(window, min_periods=1).median()
+                features_df[f'{feature}_q25_{window}'] = series.rolling(window, min_periods=1).quantile(0.25)
+                features_df[f'{feature}_q75_{window}'] = series.rolling(window, min_periods=1).quantile(0.75)
+                features_df[f'{feature}_iqr_{window}'] = features_df[f'{feature}_q75_{window}'] - features_df[f'{feature}_q25_{window}']
+                
+                # Skewness and kurtosis
+                if window >= 3:
+                    features_df[f'{feature}_skew_{window}'] = series.rolling(window, min_periods=3).skew()
+                if window >= 4:
+                    features_df[f'{feature}_kurtosis_{window}'] = series.rolling(window, min_periods=4).kurt()
+                
+                # Z-score and percentile rank
+                ma_col = f'{feature}_ma_{window}'
+                std_col = f'{feature}_std_{window}'
+                features_df[f'{feature}_zscore_{window}'] = (series - features_df[ma_col]) / (features_df[std_col] + 1e-8)
+                features_df[f'{feature}_percentile_{window}'] = series.rolling(window, min_periods=1).rank(pct=True)
+                
+                # Trend and momentum
+                features_df[f'{feature}_trend_{window}'] = (series - features_df[ma_col]) / (features_df[ma_col] + 1e-8)
+                features_df[f'{feature}_momentum_{window}'] = series.rolling(window, min_periods=1).apply(
+                    lambda x: (x.iloc[-1] - x.iloc[0]) / (x.iloc[0] + 1e-8) if len(x) > 1 else 0, raw=False)
+        
+        return features_df
+
+    def _add_interaction_features(self, features_df):
+        """Enhanced interaction features between key variables"""
+        # Size-based interactions
+        if 'order_size' in features_df.columns:
+            base_features = ['spread', 'volatility', 'arrival_rate', 'momentum', 'imbalance']
+            available_features = [f for f in base_features if f in features_df.columns]
+            
+            for feature in available_features:
+                # Basic interactions
+                features_df[f'size_{feature}_interaction'] = features_df['order_size'] * features_df[feature]
+                features_df[f'size_{feature}_ratio'] = features_df['order_size'] / (features_df[feature] + 1e-8)
+                
+                # Conditional interactions
+                features_df[f'size_{feature}_conditional'] = np.where(
+                    features_df['order_size'] > features_df['order_size'].median(),
+                    features_df[feature],
+                    0
+                )
+        
+        # Volatility-based interactions
+        if 'volatility' in features_df.columns:
+            vol_features = ['arrival_rate', 'spread', 'momentum', 'imbalance']
+            available_vol_features = [f for f in vol_features if f in features_df.columns]
+            
+            for feature in available_vol_features:
+                features_df[f'vol_{feature}_interaction'] = features_df['volatility'] * features_df[feature]
+                features_df[f'vol_{feature}_ratio'] = features_df['volatility'] / (features_df[feature] + 1e-8)
+        
+        # Spread-based interactions
+        if 'spread' in features_df.columns:
+            spread_features = ['arrival_rate', 'momentum', 'imbalance']
+            available_spread_features = [f for f in spread_features if f in features_df.columns]
+            
+            for feature in available_spread_features:
+                features_df[f'spread_{feature}_interaction'] = features_df['spread'] * features_df[feature]
+                features_df[f'spread_{feature}_ratio'] = features_df['spread'] / (features_df[feature] + 1e-8)
+        
+        # Three-way interactions
+        if all(f in features_df.columns for f in ['order_size', 'volatility', 'arrival_rate']):
+            features_df['size_vol_arrival_interaction'] = features_df['order_size'] * features_df['volatility'] * features_df['arrival_rate']
+        
+        if all(f in features_df.columns for f in ['order_size', 'spread', 'imbalance']):
+            features_df['size_spread_imbalance_interaction'] = features_df['order_size'] * features_df['spread'] * features_df['imbalance']
+        
+        # Regime-conditional interactions
+        if 'volatility' in features_df.columns and 'order_size' in features_df.columns:
+            high_vol_regime = features_df['volatility'] > features_df['volatility'].quantile(0.75)
+            features_df['size_in_high_vol'] = np.where(high_vol_regime, features_df['order_size'], 0)
+            features_df['size_in_low_vol'] = np.where(~high_vol_regime, features_df['order_size'], 0)
+        
         return features_df
     
     def _extract_lob_features(self, lob_df, orders_df):

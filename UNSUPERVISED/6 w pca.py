@@ -1008,295 +1008,429 @@ class AdvancedToxicityDetector:
         print(f"Model saved to: {model_path}")
         return model_path
 
-def create_visualizations(features_df, ensemble_scores, individual_scores, detector):
-   """Create comprehensive performance visualizations"""
-   
-   # Create plots directory
-   plots_dir = "toxicity_plots"
-   if not os.path.exists(plots_dir):
-       os.makedirs(plots_dir)
-   
-   timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-   
-   # Set publication-quality style
-   plt.style.use('ggplot')
-   plt.rcParams.update({
-       'figure.figsize': (14, 10),
-       'font.size': 11,
-       'axes.titlesize': 14,
-       'axes.labelsize': 12,
-       'legend.fontsize': 10,
-       'figure.dpi': 300,
-       'savefig.dpi': 300,
-       'savefig.bbox': 'tight'
-   })
-   
-   # 1. Comprehensive Model Performance Dashboard
-   fig, axes = plt.subplots(3, 3, figsize=(20, 15))
-   
-   # Score distribution with statistics
-   axes[0, 0].hist(ensemble_scores, bins=60, alpha=0.7, color='skyblue', edgecolor='black', density=True)
-   axes[0, 0].axvline(np.percentile(ensemble_scores, 95), color='red', linestyle='--', linewidth=2, label='95th')
-   axes[0, 0].axvline(np.percentile(ensemble_scores, 99), color='darkred', linestyle='--', linewidth=2, label='99th')
-   axes[0, 0].axvline(np.percentile(ensemble_scores, 99.5), color='purple', linestyle='--', linewidth=2, label='99.5th')
-   axes[0, 0].set_xlabel('Toxicity Score')
-   axes[0, 0].set_ylabel('Density')
-   axes[0, 0].set_title('Toxicity Score Distribution')
-   axes[0, 0].legend()
-   axes[0, 0].grid(True, alpha=0.3)
-   
-   # Detector weights
-   weights = list(detector.ensemble_weights.values())
-   detector_names = list(detector.ensemble_weights.keys())
-   sorted_items = sorted(zip(detector_names, weights), key=lambda x: x[1], reverse=True)
-   detector_names, weights = zip(*sorted_items)
-   
-   colors = plt.cm.viridis(np.linspace(0, 1, len(weights)))
-   bars = axes[0, 1].bar(range(len(weights)), weights, color=colors, alpha=0.8)
-   axes[0, 1].set_xticks(range(len(detector_names)))
-   axes[0, 1].set_xticklabels([name[:12] for name in detector_names], rotation=45, ha='right')
-   axes[0, 1].set_ylabel('Ensemble Weight')
-   axes[0, 1].set_title('Detector Weights (Sorted)')
-   axes[0, 1].grid(True, alpha=0.3, axis='y')
-   
-   # Add value labels
-   for bar, weight in zip(bars, weights):
-       axes[0, 1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.003, 
-                       f'{weight:.3f}', ha='center', va='bottom', fontsize=8)
-   
-   # Feature importance
-   if hasattr(detector, 'feature_importance') and detector.feature_importance:
-       top_features = dict(sorted(detector.feature_importance.items(), key=lambda x: x[1], reverse=True)[:12])
-       feature_names = list(top_features.keys())
-       importance_scores = list(top_features.values())
+def create_visualizations(features_df, ensemble_scores, individual_scores, detector, X_scaled=None):
+    """Create comprehensive performance visualizations"""
+    
+    # Create plots directory
+    plots_dir = "toxicity_plots"
+    if not os.path.exists(plots_dir):
+        os.makedirs(plots_dir)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Set publication-quality style
+    plt.style.use('ggplot')
+    plt.rcParams.update({
+        'figure.figsize': (14, 10),
+        'font.size': 11,
+        'axes.titlesize': 14,
+        'axes.labelsize': 12,
+        'legend.fontsize': 10,
+        'figure.dpi': 300,
+        'savefig.dpi': 300,
+        'savefig.bbox': 'tight'
+    })
+    
+    # 1. Comprehensive Model Performance Dashboard
+    fig, axes = plt.subplots(3, 3, figsize=(20, 15))
+    
+    # Score distribution with statistics
+    axes[0, 0].hist(ensemble_scores, bins=60, alpha=0.7, color='skyblue', edgecolor='black', density=True)
+    axes[0, 0].axvline(np.percentile(ensemble_scores, 95), color='red', linestyle='--', linewidth=2, label='95th')
+    axes[0, 0].axvline(np.percentile(ensemble_scores, 99), color='darkred', linestyle='--', linewidth=2, label='99th')
+    axes[0, 0].axvline(np.percentile(ensemble_scores, 99.5), color='purple', linestyle='--', linewidth=2, label='99.5th')
+    axes[0, 0].set_xlabel('Toxicity Score')
+    axes[0, 0].set_ylabel('Density')
+    axes[0, 0].set_title('Toxicity Score Distribution')
+    axes[0, 0].legend()
+    axes[0, 0].grid(True, alpha=0.3)
+    
+    # Detector weights
+    weights = list(detector.ensemble_weights.values())
+    detector_names = list(detector.ensemble_weights.keys())
+    sorted_items = sorted(zip(detector_names, weights), key=lambda x: x[1], reverse=True)
+    detector_names, weights = zip(*sorted_items)
+    
+    colors = plt.cm.viridis(np.linspace(0, 1, len(weights)))
+    bars = axes[0, 1].bar(range(len(weights)), weights, color=colors, alpha=0.8)
+    axes[0, 1].set_xticks(range(len(detector_names)))
+    axes[0, 1].set_xticklabels([name[:12] for name in detector_names], rotation=45, ha='right')
+    axes[0, 1].set_ylabel('Ensemble Weight')
+    axes[0, 1].set_title('Detector Weights (Sorted)')
+    axes[0, 1].grid(True, alpha=0.3, axis='y')
+    
+    # Add value labels
+    for bar, weight in zip(bars, weights):
+        axes[0, 1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.003, 
+                        f'{weight:.3f}', ha='center', va='bottom', fontsize=8)
+    
+    # Feature importance
+    if hasattr(detector, 'feature_importance') and detector.feature_importance:
+        top_features = dict(sorted(detector.feature_importance.items(), key=lambda x: x[1], reverse=True)[:12])
+        feature_names = list(top_features.keys())
+        importance_scores = list(top_features.values())
+        
+        colors_feat = plt.cm.plasma(np.linspace(0, 1, len(importance_scores)))
+        axes[0, 2].barh(range(len(feature_names)), importance_scores, color=colors_feat, alpha=0.8)
+        axes[0, 2].set_yticks(range(len(feature_names)))
+        axes[0, 2].set_yticklabels([name[:18] for name in feature_names])
+        axes[0, 2].set_xlabel('Importance Score')
+        axes[0, 2].set_title('Top 12 Feature Importance')
+        axes[0, 2].grid(True, alpha=0.3, axis='x')
+    
+    # Detection rates with separation scores
+    thresholds = [85, 90, 95, 97, 99, 99.5]
+    rates = []
+    separations = []
+    for threshold in thresholds:
+        rate = np.mean(ensemble_scores > np.percentile(ensemble_scores, threshold)) * 100
+        rates.append(rate)
+        
+        # Calculate separation
+        threshold_value = np.percentile(ensemble_scores, threshold)
+        anomaly_scores = ensemble_scores[ensemble_scores > threshold_value]
+        normal_scores = ensemble_scores[ensemble_scores <= threshold_value]
+        if len(normal_scores) > 0 and normal_scores.std() > 0:
+            separation = (anomaly_scores.mean() - normal_scores.mean()) / normal_scores.std()
+            separations.append(separation)
+        else:
+            separations.append(0)
+    
+    # Detection rates
+    bars = axes[1, 0].bar(range(len(thresholds)), rates, 
+                            color=['lightblue', 'lightgreen', 'orange', 'coral', 'red', 'darkred'], alpha=0.8)
+    axes[1, 0].set_xticks(range(len(thresholds)))
+    axes[1, 0].set_xticklabels([f'{t}th' for t in thresholds])
+    axes[1, 0].set_ylabel('Detection Rate (%)')
+    axes[1, 0].set_title('Detection Rates by Threshold')
+    axes[1, 0].grid(True, alpha=0.3, axis='y')
+    
+    for bar, rate in zip(bars, rates):
+        axes[1, 0].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.3, 
+                        f'{rate:.1f}%', ha='center', va='bottom', fontsize=9)
+    
+    # Separation scores
+    bars_sep = axes[1, 1].bar(range(len(thresholds)), separations, 
+                                color=['lightblue', 'lightgreen', 'orange', 'coral', 'red', 'darkred'], alpha=0.8)
+    axes[1, 1].set_xticks(range(len(thresholds)))
+    axes[1, 1].set_xticklabels([f'{t}th' for t in thresholds])
+    axes[1, 1].set_ylabel('Separation Score')
+    axes[1, 1].set_title('Anomaly Separation by Threshold')
+    axes[1, 1].grid(True, alpha=0.3, axis='y')
+    
+    for bar, sep in zip(bars_sep, separations):
+        axes[1, 1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.05, 
+                        f'{sep:.2f}', ha='center', va='bottom', fontsize=9)
+    
+    # Score timeline with anomaly highlights
+    axes[1, 2].plot(ensemble_scores, alpha=0.7, color='blue', linewidth=1)
+    axes[1, 2].axhline(np.percentile(ensemble_scores, 95), color='orange', linestyle='--', alpha=0.8)
+    axes[1, 2].axhline(np.percentile(ensemble_scores, 99), color='red', linestyle='--', alpha=0.8)
+    
+    # Highlight extreme anomalies
+    extreme_anomalies = np.where(ensemble_scores > np.percentile(ensemble_scores, 99.5))[0]
+    if len(extreme_anomalies) > 0:
+        axes[1, 2].scatter(extreme_anomalies, ensemble_scores[extreme_anomalies], 
+                            color='red', s=30, alpha=0.8, zorder=5)
+    
+    axes[1, 2].set_xlabel('Order Sequence')
+    axes[1, 2].set_ylabel('Toxicity Score')
+    axes[1, 2].set_title('Toxicity Timeline with Anomaly Highlights')
+    axes[1, 2].grid(True, alpha=0.3)
+    
+    # Detector correlation heatmap
+    if len(individual_scores) > 1:
+        top_detectors = sorted(detector.ensemble_weights.items(), key=lambda x: x[1], reverse=True)[:8]
+        top_detector_names = [name for name, _ in top_detectors]
+        
+        score_data = {name: individual_scores[name] for name in top_detector_names 
+                        if name in individual_scores}
+        
+        if len(score_data) > 1:
+            score_df = pd.DataFrame(score_data)
+            correlation_matrix = score_df.corr()
+            
+            im = axes[2, 0].imshow(correlation_matrix, cmap='RdBu_r', aspect='auto', vmin=-1, vmax=1)
+            
+            # Add correlation values
+            for i in range(len(correlation_matrix)):
+                for j in range(len(correlation_matrix)):
+                    if abs(correlation_matrix.iloc[i, j]) > 0.3:
+                        axes[2, 0].text(j, i, f'{correlation_matrix.iloc[i, j]:.2f}', 
+                                        ha='center', va='center', fontsize=8)
+            
+            axes[2, 0].set_xticks(range(len(top_detector_names)))
+            axes[2, 0].set_xticklabels([name[:8] for name in top_detector_names], rotation=45, ha='right')
+            axes[2, 0].set_yticks(range(len(top_detector_names)))
+            axes[2, 0].set_yticklabels([name[:8] for name in top_detector_names])
+            axes[2, 0].set_title('Detector Score Correlations')
+            
+            plt.colorbar(im, ax=axes[2, 0], shrink=0.8, label='Correlation')
+    
+    # Clustering quality comparison
+    clustering_scores = []
+    clustering_names = []
+    
+    for metric_name, value in detector.performance_metrics.items():
+        if 'silhouette' in metric_name and isinstance(value, (int, float)):
+            clustering_scores.append(value)
+            clustering_names.append(metric_name.replace('_silhouette', '').replace('_', ' ')[:10])
+    
+    if clustering_scores:
+        bars_clust = axes[2, 1].bar(range(len(clustering_names)), clustering_scores, 
+                                    color='lightgreen', alpha=0.8)
+        axes[2, 1].set_xticks(range(len(clustering_names)))
+        axes[2, 1].set_xticklabels(clustering_names, rotation=45, ha='right')
+        axes[2, 1].set_ylabel('Silhouette Score')
+        axes[2, 1].set_title('Clustering Quality by Method')
+        axes[2, 1].grid(True, alpha=0.3, axis='y')
+        
+        for bar, score in zip(bars_clust, clustering_scores):
+            axes[2, 1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01, 
+                            f'{score:.3f}', ha='center', va='bottom', fontsize=9)
+    
+    # Model performance summary
+    performance_summary = detector.performance_metrics.get('score_stats', {})
+    ensemble_diversity = detector.performance_metrics.get('ensemble_diversity', {})
+    
+    summary_text = f"""
+    MODEL SUMMARY
+    
+    Dataset: {len(ensemble_scores)} samples
+    Features: {len(detector.feature_selector) if detector.feature_selector else 0}
+    Detectors: {len(detector.models)}
+    
+    Score Statistics:
+    • Mean: {performance_summary.get('mean', 0):.3f}
+    • Std: {performance_summary.get('std', 0):.3f}
+    • Skewness: {performance_summary.get('skewness', 0):.3f}
+    
+    Ensemble Quality:
+    • Diversity: {ensemble_diversity.get('diversity_score', 0):.3f}
+    • Avg Correlation: {ensemble_diversity.get('avg_correlation', 0):.3f}
+    • Max Weight: {max(detector.ensemble_weights.values()) if detector.ensemble_weights else 0:.3f}
+    
+    Top Features:
+    """
+    
+    if hasattr(detector, 'feature_importance') and detector.feature_importance:
+        top_3_features = sorted(detector.feature_importance.items(), key=lambda x: x[1], reverse=True)[:3]
+        for i, (feature, importance) in enumerate(top_3_features, 1):
+            summary_text += f"\n    {i}. {feature[:20]}: {importance:.3f}"
+    
+    axes[2, 2].text(0.05, 0.95, summary_text, transform=axes[2, 2].transAxes, fontsize=10,
+                    verticalalignment='top', fontfamily='monospace',
+                    bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.9))
+    axes[2, 2].set_xlim(0, 1)
+    axes[2, 2].set_ylim(0, 1)
+    axes[2, 2].axis('off')
+    axes[2, 2].set_title('Model Summary', fontweight='bold')
+    
+    plt.suptitle(f'Toxicity Detection Model - Comprehensive Analysis\nTimestamp: {timestamp}', 
+                fontsize=16, fontweight='bold', y=0.98)
+    
+    plt.tight_layout()
+    plt.savefig(f"{plots_dir}/comprehensive_analysis_{timestamp}.png", dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 2. Anomaly Characteristics Deep Dive
+    if len(features_df.columns) > 0:
+        fig, axes = plt.subplots(2, 4, figsize=(20, 12))
+        axes = axes.flatten()
+        
+        # Define multiple anomaly thresholds for comparison
+        anomaly_threshold_95 = np.percentile(ensemble_scores, 95)
+        anomaly_threshold_99 = np.percentile(ensemble_scores, 99)
+        
+        anomaly_mask_95 = ensemble_scores > anomaly_threshold_95
+        anomaly_mask_99 = ensemble_scores > anomaly_threshold_99
+        
+        key_features = ['order_size', 'volatility', 'spread', 'momentum', 'inter_arrival_time', 
+                        'arrival_rate', 'depth_ratio', 'price_aggressiveness']
+        available_features = [f for f in key_features if f in features_df.columns][:8]
+        
+        for i, feature in enumerate(available_features):
+            if i < len(axes):
+                ax = axes[i]
+                
+                normal_data = features_df[feature][~anomaly_mask_95].dropna()
+                anomaly_95_data = features_df[feature][anomaly_mask_95 & ~anomaly_mask_99].dropna()
+                anomaly_99_data = features_df[feature][anomaly_mask_99].dropna()
+                
+                if len(normal_data) > 0:
+                    ax.hist(normal_data, bins=30, alpha=0.6, label='Normal (0-95th)', 
+                            color='lightblue', density=True, edgecolor='black')
+                
+                if len(anomaly_95_data) > 0:
+                    ax.hist(anomaly_95_data, bins=30, alpha=0.6, label='Moderate (95-99th)', 
+                            color='orange', density=True, edgecolor='black')
+                
+                if len(anomaly_99_data) > 0:
+                    ax.hist(anomaly_99_data, bins=30, alpha=0.6, label='High (99th+)', 
+                            color='red', density=True, edgecolor='black')
+                
+                ax.set_xlabel(feature.replace('_', ' ').title())
+                ax.set_ylabel('Density')
+                ax.set_title(f'{feature.replace("_", " ").title()}: Multi-Level Analysis')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+                
+                # Add mean lines
+                if len(normal_data) > 0:
+                    ax.axvline(normal_data.mean(), color='blue', linestyle=':', alpha=0.8)
+                if len(anomaly_99_data) > 0:
+                    ax.axvline(anomaly_99_data.mean(), color='red', linestyle=':', alpha=0.8)
+        
+        # Remove empty subplots
+        for i in range(len(available_features), len(axes)):
+            fig.delaxes(axes[i])
+        
+        plt.suptitle('Anomaly Characteristics Analysis', fontsize=16, fontweight='bold')
+        plt.tight_layout()
+        plt.savefig(f"{plots_dir}/anomaly_characteristics_{timestamp}.png", dpi=300, bbox_inches='tight')
+        plt.close()
+
+    # 3. PCA Analysis Visualisation (SEPARATE FIGURE)
+    if hasattr(detector, 'pca_model') and detector.pca_model is not None and X_scaled is not None:
+       fig, axes = plt.subplots(2, 3, figsize=(18, 12))
        
-       colors_feat = plt.cm.plasma(np.linspace(0, 1, len(importance_scores)))
-       axes[0, 2].barh(range(len(feature_names)), importance_scores, color=colors_feat, alpha=0.8)
-       axes[0, 2].set_yticks(range(len(feature_names)))
-       axes[0, 2].set_yticklabels([name[:18] for name in feature_names])
-       axes[0, 2].set_xlabel('Importance Score')
-       axes[0, 2].set_title('Top 12 Feature Importance')
-       axes[0, 2].grid(True, alpha=0.3, axis='x')
-   
-   # Detection rates with separation scores
-   thresholds = [85, 90, 95, 97, 99, 99.5]
-   rates = []
-   separations = []
-   for threshold in thresholds:
-       rate = np.mean(ensemble_scores > np.percentile(ensemble_scores, threshold)) * 100
-       rates.append(rate)
+       # PCA explained variance
+       n_components = len(detector.pca_explained_variance)
+       cumsum_variance = np.cumsum(detector.pca_explained_variance)
        
-       # Calculate separation
-       threshold_value = np.percentile(ensemble_scores, threshold)
-       anomaly_scores = ensemble_scores[ensemble_scores > threshold_value]
-       normal_scores = ensemble_scores[ensemble_scores <= threshold_value]
-       if len(normal_scores) > 0 and normal_scores.std() > 0:
-           separation = (anomaly_scores.mean() - normal_scores.mean()) / normal_scores.std()
-           separations.append(separation)
-       else:
-           separations.append(0)
-   
-   # Detection rates
-   bars = axes[1, 0].bar(range(len(thresholds)), rates, 
-                         color=['lightblue', 'lightgreen', 'orange', 'coral', 'red', 'darkred'], alpha=0.8)
-   axes[1, 0].set_xticks(range(len(thresholds)))
-   axes[1, 0].set_xticklabels([f'{t}th' for t in thresholds])
-   axes[1, 0].set_ylabel('Detection Rate (%)')
-   axes[1, 0].set_title('Detection Rates by Threshold')
-   axes[1, 0].grid(True, alpha=0.3, axis='y')
-   
-   for bar, rate in zip(bars, rates):
-       axes[1, 0].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.3, 
-                       f'{rate:.1f}%', ha='center', va='bottom', fontsize=9)
-   
-   # Separation scores
-   bars_sep = axes[1, 1].bar(range(len(thresholds)), separations, 
-                             color=['lightblue', 'lightgreen', 'orange', 'coral', 'red', 'darkred'], alpha=0.8)
-   axes[1, 1].set_xticks(range(len(thresholds)))
-   axes[1, 1].set_xticklabels([f'{t}th' for t in thresholds])
-   axes[1, 1].set_ylabel('Separation Score')
-   axes[1, 1].set_title('Anomaly Separation by Threshold')
-   axes[1, 1].grid(True, alpha=0.3, axis='y')
-   
-   for bar, sep in zip(bars_sep, separations):
-       axes[1, 1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.05, 
-                       f'{sep:.2f}', ha='center', va='bottom', fontsize=9)
-   
-   # Score timeline with anomaly highlights
-   axes[1, 2].plot(ensemble_scores, alpha=0.7, color='blue', linewidth=1)
-   axes[1, 2].axhline(np.percentile(ensemble_scores, 95), color='orange', linestyle='--', alpha=0.8)
-   axes[1, 2].axhline(np.percentile(ensemble_scores, 99), color='red', linestyle='--', alpha=0.8)
-   
-   # Highlight extreme anomalies
-   extreme_anomalies = np.where(ensemble_scores > np.percentile(ensemble_scores, 99.5))[0]
-   if len(extreme_anomalies) > 0:
-       axes[1, 2].scatter(extreme_anomalies, ensemble_scores[extreme_anomalies], 
-                         color='red', s=30, alpha=0.8, zorder=5)
-   
-   axes[1, 2].set_xlabel('Order Sequence')
-   axes[1, 2].set_ylabel('Toxicity Score')
-   axes[1, 2].set_title('Toxicity Timeline with Anomaly Highlights')
-   axes[1, 2].grid(True, alpha=0.3)
-   
-   # Detector correlation heatmap
-   if len(individual_scores) > 1:
-       top_detectors = sorted(detector.ensemble_weights.items(), key=lambda x: x[1], reverse=True)[:8]
-       top_detector_names = [name for name, _ in top_detectors]
+       axes[0, 0].bar(range(1, min(21, n_components + 1)), 
+                      detector.pca_explained_variance[:20], 
+                      alpha=0.7, color='skyblue', edgecolor='black')
+       axes[0, 0].set_xlabel('Principal Component')
+       axes[0, 0].set_ylabel('Explained Variance Ratio')
+       axes[0, 0].set_title('PCA Explained Variance by Component')
+       axes[0, 0].grid(True, alpha=0.3)
        
-       score_data = {name: individual_scores[name] for name in top_detector_names 
-                     if name in individual_scores}
+       # Cumulative explained variance
+       axes[0, 1].plot(range(1, min(21, n_components + 1)), 
+                       cumsum_variance[:20], 
+                       'o-', color='red', linewidth=2, markersize=6)
+       axes[0, 1].axhline(y=0.95, color='green', linestyle='--', alpha=0.8, label='95% threshold')
+       axes[0, 1].axhline(y=0.99, color='orange', linestyle='--', alpha=0.8, label='99% threshold')
+       axes[0, 1].set_xlabel('Number of Components')
+       axes[0, 1].set_ylabel('Cumulative Explained Variance')
+       axes[0, 1].set_title('Cumulative Variance Explained')
+       axes[0, 1].legend()
+       axes[0, 1].grid(True, alpha=0.3)
        
-       if len(score_data) > 1:
-           score_df = pd.DataFrame(score_data)
-           correlation_matrix = score_df.corr()
+       # Feature loadings for PC1
+       if len(detector.feature_selector) > 0:
+           pc1_loadings = detector.pca_components[0, :]
+           feature_names = detector.feature_selector
            
-           im = axes[2, 0].imshow(correlation_matrix, cmap='RdBu_r', aspect='auto', vmin=-1, vmax=1)
+           # Get top 10 absolute loadings
+           loading_pairs = list(zip(feature_names, pc1_loadings))
+           loading_pairs.sort(key=lambda x: abs(x[1]), reverse=True)
+           top_features, top_loadings = zip(*loading_pairs[:10])
+           
+           colours = ['red' if x < 0 else 'blue' for x in top_loadings]
+           bars = axes[0, 2].barh(range(len(top_features)), top_loadings, color=colours, alpha=0.7)
+           axes[0, 2].set_yticks(range(len(top_features)))
+           axes[0, 2].set_yticklabels([name[:15] for name in top_features])
+           axes[0, 2].set_xlabel('Loading Value')
+           axes[0, 2].set_title('PC1 Feature Loadings (Top 10)')
+           axes[0, 2].grid(True, alpha=0.3, axis='x')
+           
+           # Add loading values
+           for bar, loading in zip(bars, top_loadings):
+               axes[0, 2].text(loading + 0.01 if loading > 0 else loading - 0.01, 
+                               bar.get_y() + bar.get_height()/2, 
+                               f'{loading:.3f}', ha='left' if loading > 0 else 'right', 
+                               va='center', fontsize=8)
+       
+       # Feature loadings for PC2
+       if len(detector.pca_explained_variance) > 1:
+           pc2_loadings = detector.pca_components[1, :]
+           
+           loading_pairs = list(zip(feature_names, pc2_loadings))
+           loading_pairs.sort(key=lambda x: abs(x[1]), reverse=True)
+           top_features, top_loadings = zip(*loading_pairs[:10])
+           
+           colours = ['red' if x < 0 else 'green' for x in top_loadings]
+           bars = axes[1, 0].barh(range(len(top_features)), top_loadings, color=colours, alpha=0.7)
+           axes[1, 0].set_yticks(range(len(top_features)))
+           axes[1, 0].set_yticklabels([name[:15] for name in top_features])
+           axes[1, 0].set_xlabel('Loading Value')
+           axes[1, 0].set_title('PC2 Feature Loadings (Top 10)')
+           axes[1, 0].grid(True, alpha=0.3, axis='x')
+           
+           for bar, loading in zip(bars, top_loadings):
+               axes[1, 0].text(loading + 0.01 if loading > 0 else loading - 0.01, 
+                               bar.get_y() + bar.get_height()/2, 
+                               f'{loading:.3f}', ha='left' if loading > 0 else 'right', 
+                               va='center', fontsize=8)
+       
+       # PCA scatter plot with toxicity scores
+       if len(detector.pca_explained_variance) > 1:
+           # Transform data to PCA space for visualisation
+           sample_size = min(1000, X_scaled.shape[0])
+           X_pca_viz = detector.pca_model.transform(X_scaled[:sample_size])
+           scores_sample = ensemble_scores[:sample_size]
+           
+           scatter = axes[1, 1].scatter(X_pca_viz[:, 0], X_pca_viz[:, 1], 
+                                       c=scores_sample, cmap='viridis', 
+                                       alpha=0.6, s=30)
+           axes[1, 1].set_xlabel(f'PC1 ({detector.pca_explained_variance[0]:.1%} variance)')
+           axes[1, 1].set_ylabel(f'PC2 ({detector.pca_explained_variance[1]:.1%} variance)')
+           axes[1, 1].set_title('PCA Space: Coloured by Toxicity Score')
+           plt.colorbar(scatter, ax=axes[1, 1], label='Toxicity Score')
+           axes[1, 1].grid(True, alpha=0.3)
+           
+           # Highlight extreme anomalies
+           extreme_threshold = np.percentile(scores_sample, 99)
+           extreme_mask = scores_sample > extreme_threshold
+           if np.any(extreme_mask):
+               axes[1, 1].scatter(X_pca_viz[extreme_mask, 0], X_pca_viz[extreme_mask, 1], 
+                                 c='red', s=60, alpha=0.8, marker='x', 
+                                 label=f'Top 1% Anomalies ({np.sum(extreme_mask)})')
+               axes[1, 1].legend()
+       
+       # PCA component correlation heatmap
+       if len(detector.pca_explained_variance) >= 4:
+           # Calculate correlations between first 6 components
+           n_comp_viz = min(6, len(detector.pca_explained_variance))
+           X_pca_corr = detector.pca_model.transform(X_scaled)[:, :n_comp_viz]
+           pca_corr_matrix = np.corrcoef(X_pca_corr.T)
+           
+           im = axes[1, 2].imshow(pca_corr_matrix, cmap='RdBu_r', aspect='auto', vmin=-1, vmax=1)
            
            # Add correlation values
-           for i in range(len(correlation_matrix)):
-               for j in range(len(correlation_matrix)):
-                   if abs(correlation_matrix.iloc[i, j]) > 0.3:
-                       axes[2, 0].text(j, i, f'{correlation_matrix.iloc[i, j]:.2f}', 
-                                       ha='center', va='center', fontsize=8)
+           for i in range(n_comp_viz):
+               for j in range(n_comp_viz):
+                   axes[1, 2].text(j, i, f'{pca_corr_matrix[i, j]:.2f}', 
+                                   ha='center', va='center', fontsize=10)
            
-           axes[2, 0].set_xticks(range(len(top_detector_names)))
-           axes[2, 0].set_xticklabels([name[:8] for name in top_detector_names], rotation=45, ha='right')
-           axes[2, 0].set_yticks(range(len(top_detector_names)))
-           axes[2, 0].set_yticklabels([name[:8] for name in top_detector_names])
-           axes[2, 0].set_title('Detector Score Correlations')
+           axes[1, 2].set_xticks(range(n_comp_viz))
+           axes[1, 2].set_xticklabels([f'PC{i+1}' for i in range(n_comp_viz)])
+           axes[1, 2].set_yticks(range(n_comp_viz))
+           axes[1, 2].set_yticklabels([f'PC{i+1}' for i in range(n_comp_viz)])
+           axes[1, 2].set_title('PCA Component Correlations')
            
-           plt.colorbar(im, ax=axes[2, 0], shrink=0.8, label='Correlation')
-   
-   # Clustering quality comparison
-   clustering_scores = []
-   clustering_names = []
-   
-   for metric_name, value in detector.performance_metrics.items():
-       if 'silhouette' in metric_name and isinstance(value, (int, float)):
-           clustering_scores.append(value)
-           clustering_names.append(metric_name.replace('_silhouette', '').replace('_', ' ')[:10])
-   
-   if clustering_scores:
-       bars_clust = axes[2, 1].bar(range(len(clustering_names)), clustering_scores, 
-                                   color='lightgreen', alpha=0.8)
-       axes[2, 1].set_xticks(range(len(clustering_names)))
-       axes[2, 1].set_xticklabels(clustering_names, rotation=45, ha='right')
-       axes[2, 1].set_ylabel('Silhouette Score')
-       axes[2, 1].set_title('Clustering Quality by Method')
-       axes[2, 1].grid(True, alpha=0.3, axis='y')
+           plt.colorbar(im, ax=axes[1, 2], shrink=0.8, label='Correlation')
+       else:
+           # If less than 4 components, show a simple text message
+           axes[1, 2].text(0.5, 0.5, 'Insufficient components\nfor correlation analysis', 
+                          ha='center', va='center', transform=axes[1, 2].transAxes, fontsize=12)
+           axes[1, 2].set_title('PCA Component Correlations')
+           axes[1, 2].axis('off')
        
-       for bar, score in zip(bars_clust, clustering_scores):
-           axes[2, 1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01, 
-                           f'{score:.3f}', ha='center', va='bottom', fontsize=9)
-   
-   # Model performance summary
-   performance_summary = detector.performance_metrics.get('score_stats', {})
-   ensemble_diversity = detector.performance_metrics.get('ensemble_diversity', {})
-   
-   summary_text = f"""
-   MODEL SUMMARY
-   
-   Dataset: {len(ensemble_scores)} samples
-   Features: {len(detector.feature_selector) if detector.feature_selector else 0}
-   Detectors: {len(detector.models)}
-   
-   Score Statistics:
-   • Mean: {performance_summary.get('mean', 0):.3f}
-   • Std: {performance_summary.get('std', 0):.3f}
-   • Skewness: {performance_summary.get('skewness', 0):.3f}
-   
-   Ensemble Quality:
-   • Diversity: {ensemble_diversity.get('diversity_score', 0):.3f}
-   • Avg Correlation: {ensemble_diversity.get('avg_correlation', 0):.3f}
-   • Max Weight: {max(detector.ensemble_weights.values()) if detector.ensemble_weights else 0:.3f}
-   
-   Top Features:
-   """
-   
-   if hasattr(detector, 'feature_importance') and detector.feature_importance:
-       top_3_features = sorted(detector.feature_importance.items(), key=lambda x: x[1], reverse=True)[:3]
-       for i, (feature, importance) in enumerate(top_3_features, 1):
-           summary_text += f"\n    {i}. {feature[:20]}: {importance:.3f}"
-   
-   axes[2, 2].text(0.05, 0.95, summary_text, transform=axes[2, 2].transAxes, fontsize=10,
-                   verticalalignment='top', fontfamily='monospace',
-                   bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.9))
-   axes[2, 2].set_xlim(0, 1)
-   axes[2, 2].set_ylim(0, 1)
-   axes[2, 2].axis('off')
-   axes[2, 2].set_title('Model Summary', fontweight='bold')
-   
-   plt.suptitle(f'Toxicity Detection Model - Comprehensive Analysis\nTimestamp: {timestamp}', 
-               fontsize=16, fontweight='bold', y=0.98)
-   
-   plt.tight_layout()
-   plt.savefig(f"{plots_dir}/comprehensive_analysis_{timestamp}.png", dpi=300, bbox_inches='tight')
-   plt.close()
-   
-   # 2. Anomaly Characteristics Deep Dive
-   if len(features_df.columns) > 0:
-       fig, axes = plt.subplots(2, 4, figsize=(20, 12))
-       axes = axes.flatten()
-       
-       # Define multiple anomaly thresholds for comparison
-       anomaly_threshold_95 = np.percentile(ensemble_scores, 95)
-       anomaly_threshold_99 = np.percentile(ensemble_scores, 99)
-       
-       anomaly_mask_95 = ensemble_scores > anomaly_threshold_95
-       anomaly_mask_99 = ensemble_scores > anomaly_threshold_99
-       
-       key_features = ['order_size', 'volatility', 'spread', 'momentum', 'inter_arrival_time', 
-                      'arrival_rate', 'depth_ratio', 'price_aggressiveness']
-       available_features = [f for f in key_features if f in features_df.columns][:8]
-       
-       for i, feature in enumerate(available_features):
-           if i < len(axes):
-               ax = axes[i]
-               
-               normal_data = features_df[feature][~anomaly_mask_95].dropna()
-               anomaly_95_data = features_df[feature][anomaly_mask_95 & ~anomaly_mask_99].dropna()
-               anomaly_99_data = features_df[feature][anomaly_mask_99].dropna()
-               
-               if len(normal_data) > 0:
-                   ax.hist(normal_data, bins=30, alpha=0.6, label='Normal (0-95th)', 
-                          color='lightblue', density=True, edgecolor='black')
-               
-               if len(anomaly_95_data) > 0:
-                   ax.hist(anomaly_95_data, bins=30, alpha=0.6, label='Moderate (95-99th)', 
-                          color='orange', density=True, edgecolor='black')
-               
-               if len(anomaly_99_data) > 0:
-                   ax.hist(anomaly_99_data, bins=30, alpha=0.6, label='High (99th+)', 
-                          color='red', density=True, edgecolor='black')
-               
-               ax.set_xlabel(feature.replace('_', ' ').title())
-               ax.set_ylabel('Density')
-               ax.set_title(f'{feature.replace("_", " ").title()}: Multi-Level Analysis')
-               ax.legend()
-               ax.grid(True, alpha=0.3)
-               
-               # Add mean lines
-               if len(normal_data) > 0:
-                   ax.axvline(normal_data.mean(), color='blue', linestyle=':', alpha=0.8)
-               if len(anomaly_99_data) > 0:
-                   ax.axvline(anomaly_99_data.mean(), color='red', linestyle=':', alpha=0.8)
-       
-       # Remove empty subplots
-       for i in range(len(available_features), len(axes)):
-           fig.delaxes(axes[i])
-       
-       plt.suptitle('Anomaly Characteristics Analysis', fontsize=16, fontweight='bold')
+       plt.suptitle('PCA Analysis for Toxicity Detection', fontsize=16, fontweight='bold')
        plt.tight_layout()
-       plt.savefig(f"{plots_dir}/anomaly_characteristics_{timestamp}.png", dpi=300, bbox_inches='tight')
+       plt.savefig(f"{plots_dir}/pca_analysis_{timestamp}.png", dpi=300, bbox_inches='tight')
        plt.close()
-   
-   print(f"Visualizations saved to: {plots_dir}")
-   
-   # List generated files
-   plot_files = [f for f in os.listdir(plots_dir) if f.endswith('.png') and timestamp in f]
-   print(f"Generated {len(plot_files)} plot files:")
-   for file in sorted(plot_files):
-       print(f"  {file}")
+    
+    print(f"Visualizations saved to: {plots_dir}")
+    
+    # List generated files
+    plot_files = [f for f in os.listdir(plots_dir) if f.endswith('.png') and timestamp in f]
+    print(f"Generated {len(plot_files)} plot files:")
+    for file in sorted(plot_files):
+        print(f"  {file}")
 
 def main_training_pipeline(data_dir="market_data", n_trials=30):
    """Training pipeline for toxicity detection"""
