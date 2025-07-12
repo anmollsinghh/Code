@@ -1,4 +1,3 @@
-#training.py
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -16,6 +15,7 @@ from sklearn.neighbors import LocalOutlierFactor
 from sklearn.mixture import GaussianMixture
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.svm import OneClassSVM
+from sklearn.model_selection import TimeSeriesSplit, KFold, StratifiedKFold
 from scipy import stats
 from scipy.spatial.distance import cdist
 import joblib
@@ -388,7 +388,7 @@ class MarketDataFeatureEngineer:
         return features_df
 
 class AdvancedToxicityDetector:
-    """Advanced ensemble detector with algorithms"""
+    """Advanced ensemble detector with algorithms and cross-validation"""
     
     def __init__(self):
         self.models = {}
@@ -398,6 +398,8 @@ class AdvancedToxicityDetector:
         self.performance_metrics = {}
         self.best_hyperparameters = {}
         self.feature_importance = {}
+        self.cv_results = {}
+        self.validation_scores = {}
         
     def prepare_features(self, features_df, variance_threshold=0.01, correlation_threshold=0.95):
         """Feature preparation with selection"""
@@ -520,9 +522,12 @@ class AdvancedToxicityDetector:
         
         return scaler_scores
     
-    def optimize_hyperparameters(self, X_scaled, n_trials=30):
-        """Optimize hyperparameters using Optuna"""
-        print(f"Optimizing hyperparameters with {n_trials} trials...")
+    def optimize_hyperparameters_with_cv(self, X_scaled, n_trials=30, cv_folds=5):
+        """Optimize hyperparameters using Optuna with cross-validation"""
+        print(f"Optimizing hyperparameters with {n_trials} trials and {cv_folds}-fold CV...")
+        
+        # Use TimeSeriesSplit for temporal data
+        cv_splitter = TimeSeriesSplit(n_splits=cv_folds)
         
         def objective(trial):
             contamination = trial.suggest_float('contamination', 0.01, 0.2)
@@ -530,88 +535,175 @@ class AdvancedToxicityDetector:
             n_neighbors = trial.suggest_int('n_neighbors', 5, 30)
             n_clusters = trial.suggest_int('n_clusters', 3, min(15, len(X_scaled) // 30))
             
-            try:
-                iso_forest = IsolationForest(
-                    contamination=contamination,
-                    n_estimators=n_estimators,
-                    random_state=42
-                )
-                iso_forest.fit(X_scaled)
-                
-                lof = LocalOutlierFactor(
-                    n_neighbors=n_neighbors,
-                    contamination=contamination,
-                    novelty=True
-                )
-                lof.fit(X_scaled)
-                
-                kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-                cluster_labels = kmeans.fit_predict(X_scaled)
-                
-                if len(set(cluster_labels)) > 1:
-                    silhouette = silhouette_score(X_scaled, cluster_labels)
-                    calinski = calinski_harabasz_score(X_scaled, cluster_labels)
-                    davies_bouldin = davies_bouldin_score(X_scaled, cluster_labels)
+            cv_scores = []
+            
+            for train_idx, test_idx in cv_splitter.split(X_scaled):
+                try:
+                    X_train, X_test = X_scaled[train_idx], X_scaled[test_idx]
                     
-                    score = silhouette + (calinski / 1000) - davies_bouldin
-                else:
-                    score = -1
-                
-                return score
-                
-            except Exception:
-                return -10
+                    # Train models on fold
+                    iso_forest = IsolationForest(
+                        contamination=contamination,
+                        n_estimators=n_estimators,
+                        random_state=42
+                    )
+                    iso_forest.fit(X_train)
+                    
+                    lof = LocalOutlierFactor(
+                        n_neighbors=n_neighbors,
+                        contamination=contamination,
+                        novelty=True
+                    )
+                    lof.fit(X_train)
+                    
+                    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+                    cluster_labels = kmeans.fit_predict(X_train)
+                    
+                    # Evaluate on test set
+                    if len(set(cluster_labels)) > 1:
+                        test_cluster_labels = kmeans.predict(X_test)
+                        
+                        # Calculate score only if we have multiple clusters in test set
+                        if len(set(test_cluster_labels)) > 1:
+                            silhouette = silhouette_score(X_test, test_cluster_labels)
+                            calinski = calinski_harabasz_score(X_test, test_cluster_labels)
+                            davies_bouldin = davies_bouldin_score(X_test, test_cluster_labels)
+                            
+                            fold_score = silhouette + (calinski / 1000) - davies_bouldin
+                            cv_scores.append(fold_score)
+                        else:
+                            cv_scores.append(-1)
+                    else:
+                        cv_scores.append(-1)
+                        
+                except Exception:
+                    cv_scores.append(-10)
+            
+            # Return mean CV score
+            return np.mean(cv_scores) if cv_scores else -10
         
         study = optuna.create_study(direction='maximize', sampler=TPESampler())
         study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
         
         self.best_hyperparameters = study.best_params
         print(f"Best hyperparameters: {self.best_hyperparameters}")
-        print(f"Best score: {study.best_value:.4f}")
+        print(f"Best CV score: {study.best_value:.4f}")
         
         return self.best_hyperparameters
     
-    def train_ensemble(self, X_scaled, hyperparameters=None):
-        """Train ensemble of toxicity detectors"""
-        print("Training ensemble detectors...")
+    def train_ensemble_with_cv(self, X_scaled, hyperparameters=None, cv_folds=5):
+        """Train ensemble of toxicity detectors with cross-validation"""
+        print(f"Training ensemble detectors with {cv_folds}-fold cross-validation...")
         
         if hyperparameters is None:
             hyperparameters = self.best_hyperparameters
         
+        cv_splitter = TimeSeriesSplit(n_splits=cv_folds)
         detectors = {}
-        
-        # Isolation Forest variants
+        cv_results = {}
+        # Isolation Forest variants with CV
         contamination_rates = [0.025, 0.05, 0.1, 0.15]
         for i, contamination in enumerate(contamination_rates):
-            try:
-                iso_forest = IsolationForest(
-                    contamination=contamination,
-                    n_estimators=hyperparameters.get('n_estimators', 200),
-                    random_state=42 + i,
-                    bootstrap=True,
-                    n_jobs=-1
-                )
-                iso_forest.fit(X_scaled)
-                detectors[f'isolation_forest_{contamination}'] = iso_forest
-            except Exception as e:
-                print(f"Warning: Failed to train Isolation Forest with contamination {contamination}: {e}")
+            detector_name = f'isolation_forest_{contamination}'
+            cv_scores = []
+            
+            for fold, (train_idx, test_idx) in enumerate(cv_splitter.split(X_scaled)):
+                try:
+                    X_train, X_test = X_scaled[train_idx], X_scaled[test_idx]
+                    
+                    iso_forest = IsolationForest(
+                        contamination=contamination,
+                        n_estimators=hyperparameters.get('n_estimators', 200),
+                        random_state=42 + i,
+                        bootstrap=True,
+                        n_jobs=-1
+                    )
+                    iso_forest.fit(X_train)
+                    
+                    # Calculate anomaly scores for validation
+                    train_scores = -iso_forest.decision_function(X_train)
+                    test_scores = -iso_forest.decision_function(X_test)
+                    
+                    # Validation score based on score distribution quality
+                    score_range = np.max(test_scores) - np.min(test_scores)
+                    score_std = np.std(test_scores)
+                    validation_score = score_range * score_std
+                    
+                    cv_scores.append(validation_score)
+                    
+                except Exception as e:
+                    cv_scores.append(0)
+            
+            # Train final model on full data if CV performance is good
+            if np.mean(cv_scores) > 0:
+                try:
+                    final_iso_forest = IsolationForest(
+                        contamination=contamination,
+                        n_estimators=hyperparameters.get('n_estimators', 200),
+                        random_state=42 + i,
+                        bootstrap=True,
+                        n_jobs=-1
+                    )
+                    final_iso_forest.fit(X_scaled)
+                    detectors[detector_name] = final_iso_forest
+                    cv_results[detector_name] = {
+                        'mean_cv_score': np.mean(cv_scores),
+                        'std_cv_score': np.std(cv_scores),
+                        'fold_scores': cv_scores
+                    }
+                except Exception as e:
+                    print(f"Warning: Failed to train final {detector_name}: {e}")
         
-        # LOF variants
+        # LOF variants with CV
         neighbor_counts = [5, 10, 20]
         for neighbors in neighbor_counts:
-            try:
-                lof = LocalOutlierFactor(
-                    n_neighbors=neighbors,
-                    contamination=hyperparameters.get('contamination', 0.1),
-                    novelty=True,
-                    n_jobs = -1
-                )
-                lof.fit(X_scaled)
-                detectors[f'lof_{neighbors}'] = lof
-            except Exception as e:
-                print(f"Warning: Failed to train LOF with {neighbors} neighbors: {e}")
-       
-        # One-Class SVM variants
+            detector_name = f'lof_{neighbors}'
+            cv_scores = []
+            
+            for fold, (train_idx, test_idx) in enumerate(cv_splitter.split(X_scaled)):
+                try:
+                    X_train, X_test = X_scaled[train_idx], X_scaled[test_idx]
+                    
+                    lof = LocalOutlierFactor(
+                        n_neighbors=neighbors,
+                        contamination=hyperparameters.get('contamination', 0.1),
+                        novelty=True,
+                        n_jobs=-1
+                    )
+                    lof.fit(X_train)
+                    
+                    # Calculate anomaly scores
+                    test_scores = -lof.score_samples(X_test)
+                    
+                    # Validation score
+                    score_range = np.max(test_scores) - np.min(test_scores)
+                    score_std = np.std(test_scores)
+                    validation_score = score_range * score_std
+                    
+                    cv_scores.append(validation_score)
+                    
+                except Exception:
+                    cv_scores.append(0)
+            
+            if np.mean(cv_scores) > 0:
+                try:
+                    final_lof = LocalOutlierFactor(
+                        n_neighbors=neighbors,
+                        contamination=hyperparameters.get('contamination', 0.1),
+                        novelty=True,
+                        n_jobs=-1
+                    )
+                    final_lof.fit(X_scaled)
+                    detectors[detector_name] = final_lof
+                    cv_results[detector_name] = {
+                        'mean_cv_score': np.mean(cv_scores),
+                        'std_cv_score': np.std(cv_scores),
+                        'fold_scores': cv_scores
+                    }
+                except Exception as e:
+                    print(f"Warning: Failed to train final {detector_name}: {e}")
+        
+        # One-Class SVM variants with CV
         svm_configs = [
             {'kernel': 'rbf', 'gamma': 'scale', 'nu': 0.05},
             {'kernel': 'rbf', 'gamma': 'scale', 'nu': 0.1},
@@ -619,106 +711,230 @@ class AdvancedToxicityDetector:
         ]
         
         for i, config in enumerate(svm_configs):
-            try:
-                svm = OneClassSVM(**config)
-                svm.fit(X_scaled)
-                detectors[f'svm_{config["kernel"]}_{config["nu"]}'] = svm
-            except Exception as e:
-                print(f"Warning: Failed to train SVM with config {config}: {e}")
+            detector_name = f'svm_{config["kernel"]}_{config["nu"]}'
+            cv_scores = []
+            
+            for fold, (train_idx, test_idx) in enumerate(cv_splitter.split(X_scaled)):
+                try:
+                    X_train, X_test = X_scaled[train_idx], X_scaled[test_idx]
+                    
+                    svm = OneClassSVM(**config)
+                    svm.fit(X_train)
+                    
+                    # Calculate scores
+                    test_scores = -svm.decision_function(X_test)
+                    
+                    # Validation score
+                    score_range = np.max(test_scores) - np.min(test_scores)
+                    score_std = np.std(test_scores)
+                    validation_score = score_range * score_std
+                    
+                    cv_scores.append(validation_score)
+                    
+                except Exception:
+                    cv_scores.append(0)
+            
+            if np.mean(cv_scores) > 0:
+                try:
+                    final_svm = OneClassSVM(**config)
+                    final_svm.fit(X_scaled)
+                    detectors[detector_name] = final_svm
+                    cv_results[detector_name] = {
+                        'mean_cv_score': np.mean(cv_scores),
+                        'std_cv_score': np.std(cv_scores),
+                        'fold_scores': cv_scores
+                    }
+                except Exception as e:
+                    print(f"Warning: Failed to train final {detector_name}: {e}")
         
-        # Gaussian Mixture Models
+        # Gaussian Mixture Models with CV
         component_counts = [3, 5, 8]
         for n_components in component_counts:
-            try:
-                n_comp = min(n_components, max(2, len(X_scaled) // 50))
-                if n_comp < 2:
-                    continue
-                
-                gmm = GaussianMixture(
-                    n_components=n_comp,
-                    random_state=42,
-                    covariance_type='tied'
-                )
-                gmm.fit(X_scaled)
-                detectors[f'gmm_{n_comp}'] = gmm
-            except Exception as e:
-                print(f"Warning: Failed to train GMM with {n_comp} components: {e}")
+            detector_name = f'gmm_{n_components}'
+            cv_scores = []
+            
+            for fold, (train_idx, test_idx) in enumerate(cv_splitter.split(X_scaled)):
+                try:
+                    X_train, X_test = X_scaled[train_idx], X_scaled[test_idx]
+                    
+                    n_comp = min(n_components, max(2, len(X_train) // 50))
+                    if n_comp < 2:
+                        continue
+                    
+                    gmm = GaussianMixture(
+                        n_components=n_comp,
+                        random_state=42,
+                        covariance_type='tied'
+                    )
+                    gmm.fit(X_train)
+                    
+                    # Calculate scores
+                    test_scores = -gmm.score_samples(X_test)
+                    
+                    # Validation score
+                    score_range = np.max(test_scores) - np.min(test_scores)
+                    score_std = np.std(test_scores)
+                    validation_score = score_range * score_std
+                    
+                    cv_scores.append(validation_score)
+                    
+                except Exception:
+                    cv_scores.append(0)
+            
+            if np.mean(cv_scores) > 0:
+                try:
+                    n_comp = min(n_components, max(2, len(X_scaled) // 50))
+                    if n_comp >= 2:
+                        final_gmm = GaussianMixture(
+                            n_components=n_comp,
+                            random_state=42,
+                            covariance_type='tied'
+                        )
+                        final_gmm.fit(X_scaled)
+                        detectors[detector_name] = final_gmm
+                        cv_results[detector_name] = {
+                            'mean_cv_score': np.mean(cv_scores),
+                            'std_cv_score': np.std(cv_scores),
+                            'fold_scores': cv_scores
+                        }
+                except Exception as e:
+                    print(f"Warning: Failed to train final {detector_name}: {e}")
         
-        # K-means based detectors
+        # K-means based detectors with CV
         cluster_counts = [5, 8, 12]
         for n_clusters in cluster_counts:
-            try:
-                n_clust = min(n_clusters, max(2, len(X_scaled) // 30))
-                if n_clust < 2:
-                    continue
-                
-                kmeans = KMeans(n_clusters=n_clust, random_state=42, n_init=10)
-                cluster_labels = kmeans.fit_predict(X_scaled)
-                distances = np.min(kmeans.transform(X_scaled), axis=1)
-                
-                detectors[f'kmeans_{n_clust}'] = {
-                    'kmeans': kmeans,
-                    'distance_threshold': np.percentile(distances, 95),
-                    'cluster_sizes': np.bincount(cluster_labels)
-                }
-            except Exception as e:
-                print(f"Warning: Failed to train K-means with {n_clust} clusters: {e}")
+            detector_name = f'kmeans_{n_clusters}'
+            cv_scores = []
+            
+            for fold, (train_idx, test_idx) in enumerate(cv_splitter.split(X_scaled)):
+                try:
+                    X_train, X_test = X_scaled[train_idx], X_scaled[test_idx]
+                    
+                    n_clust = min(n_clusters, max(2, len(X_train) // 30))
+                    if n_clust < 2:
+                        continue
+                    
+                    kmeans = KMeans(n_clusters=n_clust, random_state=42, n_init=10)
+                    cluster_labels = kmeans.fit_predict(X_train)
+                    
+                    # Test on validation set
+                    test_labels = kmeans.predict(X_test)
+                    test_distances = np.min(kmeans.transform(X_test), axis=1)
+                    
+                    # Validation score based on cluster quality
+                    if len(set(test_labels)) > 1:
+                        silhouette = silhouette_score(X_test, test_labels)
+                        cv_scores.append(silhouette)
+                    else:
+                        cv_scores.append(0)
+                        
+                except Exception:
+                    cv_scores.append(0)
+            
+            if np.mean(cv_scores) > 0:
+                try:
+                    n_clust = min(n_clusters, max(2, len(X_scaled) // 30))
+                    if n_clust >= 2:
+                        final_kmeans = KMeans(n_clusters=n_clust, random_state=42, n_init=10)
+                        cluster_labels = final_kmeans.fit_predict(X_scaled)
+                        distances = np.min(final_kmeans.transform(X_scaled), axis=1)
+                        
+                        detectors[detector_name] = {
+                            'kmeans': final_kmeans,
+                            'distance_threshold': np.percentile(distances, 95),
+                            'cluster_sizes': np.bincount(cluster_labels)
+                        }
+                        cv_results[detector_name] = {
+                            'mean_cv_score': np.mean(cv_scores),
+                            'std_cv_score': np.std(cv_scores),
+                            'fold_scores': cv_scores
+                        }
+                except Exception as e:
+                    print(f"Warning: Failed to train final {detector_name}: {e}")
         
-        # DBSCAN detector
-        dbscan_detector = self._train_dbscan_detector(X_scaled)
-        if dbscan_detector:
-            detectors['dbscan'] = dbscan_detector
+        # DBSCAN detector with CV
+        dbscan_cv_results = self._train_dbscan_detector_with_cv(X_scaled, cv_splitter)
+        if dbscan_cv_results:
+            detectors['dbscan'] = dbscan_cv_results['detector']
+            cv_results['dbscan'] = dbscan_cv_results['cv_results']
         
         self.models = detectors
-        print(f"Trained {len(detectors)} detectors")
+        self.cv_results = cv_results
+        
+        print(f"Trained {len(detectors)} detectors with cross-validation")
+        print("\nCross-validation Results Summary:")
+        for name, results in cv_results.items():
+            print(f"  {name}: {results['mean_cv_score']:.4f} ± {results['std_cv_score']:.4f}")
         
         return detectors
     
-    def _train_dbscan_detector(self, X_scaled):
-        """Train DBSCAN detector with parameter search"""
+    def _train_dbscan_detector_with_cv(self, X_scaled, cv_splitter):
+        """Train DBSCAN detector with CV parameter search"""
         best_score = -1
         best_params = None
+        cv_scores = []
         
         eps_values = np.logspace(-1.5, 0.5, 10)
         min_samples_values = [5, 10, 15]
         
         for eps in eps_values:
             for min_samples in min_samples_values:
-                try:
-                    dbscan = DBSCAN(eps=eps, min_samples=min_samples)
-                    labels = dbscan.fit_predict(X_scaled)
-                    
-                    n_outliers = np.sum(labels == -1)
-                    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-                    
-                    if 2 <= n_clusters <= 10 and 0.01 <= n_outliers / len(X_scaled) <= 0.2:
-                        non_outlier_mask = labels != -1
-                        if np.sum(non_outlier_mask) > 10 and len(set(labels[non_outlier_mask])) > 1:
-                            score = silhouette_score(X_scaled[non_outlier_mask], labels[non_outlier_mask])
-                            if score > best_score:
-                                best_score = score
-                                best_params = {'eps': eps, 'min_samples': min_samples}
-                except Exception:
-                    continue
+                fold_scores = []
+                
+                for train_idx, test_idx in cv_splitter.split(X_scaled):
+                    try:
+                        X_train = X_scaled[train_idx]
+                        
+                        dbscan = DBSCAN(eps=eps, min_samples=min_samples)
+                        labels = dbscan.fit_predict(X_train)
+                        
+                        n_outliers = np.sum(labels == -1)
+                        n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+                        
+                        if 2 <= n_clusters <= 10 and 0.01 <= n_outliers / len(X_train) <= 0.2:
+                            non_outlier_mask = labels != -1
+                            if np.sum(non_outlier_mask) > 10 and len(set(labels[non_outlier_mask])) > 1:
+                                score = silhouette_score(X_train[non_outlier_mask], labels[non_outlier_mask])
+                                fold_scores.append(score)
+                            else:
+                                fold_scores.append(0)
+                        else:
+                            fold_scores.append(0)
+                    except Exception:
+                        fold_scores.append(0)
+                
+                mean_score = np.mean(fold_scores) if fold_scores else 0
+                if mean_score > best_score:
+                    best_score = mean_score
+                    best_params = {'eps': eps, 'min_samples': min_samples}
+                    cv_scores = fold_scores
         
-        if best_params:
+        if best_params and best_score > 0:
             try:
+                # Train final model
                 dbscan = DBSCAN(**best_params)
                 labels = dbscan.fit_predict(X_scaled)
                 return {
-                    'dbscan': dbscan,
-                    'labels': labels,
-                    'params': best_params,
-                    'score': best_score
+                    'detector': {
+                        'dbscan': dbscan,
+                        'labels': labels,
+                        'params': best_params,
+                        'score': best_score
+                    },
+                    'cv_results': {
+                        'mean_cv_score': np.mean(cv_scores),
+                        'std_cv_score': np.std(cv_scores),
+                        'fold_scores': cv_scores
+                    }
                 }
             except Exception:
                 return None
         
         return None
     
-    def calculate_ensemble_scores(self, X_scaled):
-        """Calculate ensemble toxicity scores with weighting"""
-        print("Calculating ensemble scores...")
+    def calculate_ensemble_scores_with_validation(self, X_scaled):
+        """Calculate ensemble toxicity scores with validation-based weighting"""
+        print("Calculating ensemble scores with validation-based weighting...")
         
         individual_scores = {}
         individual_weights = {}
@@ -751,7 +967,7 @@ class AdvancedToxicityDetector:
                 else:
                     continue
                 
-                # Normalization
+                # Normalisation
                 if len(scores) > 0 and scores.max() > scores.min():
                     q25, q75 = np.percentile(scores, [25, 75])
                     iqr = q75 - q25
@@ -765,24 +981,25 @@ class AdvancedToxicityDetector:
                 
                 individual_scores[name] = scores
                 
-                # Weight calculation
-                weight = self._calculate_weight(scores, name)
-                individual_weights[name] = weight
+                # Weight calculation incorporating CV results
+                cv_performance = self.cv_results.get(name, {})
+                cv_weight = self._calculate_cv_weight(scores, name, cv_performance)
+                individual_weights[name] = cv_weight
                 
             except Exception as e:
                 print(f"Error calculating scores for {name}: {e}")
                 continue
         
-        # Normalize weights with diversity bonus
+        # Normalise weights with diversity bonus and CV performance
         total_weight = sum(individual_weights.values())
         if total_weight > 0:
-            # Prevent dominance
-            max_weight = 0.25
+            # Prevent dominance whilst favouring high CV performers
+            max_weight = 0.3
             normalized_weights = {}
             for name, weight in individual_weights.items():
                 normalized_weights[name] = min(weight / total_weight, max_weight)
             
-            # Renormalize
+            # Renormalise
             total_capped_weight = sum(normalized_weights.values())
             individual_weights = {name: weight / total_capped_weight 
                                 for name, weight in normalized_weights.items()}
@@ -797,33 +1014,27 @@ class AdvancedToxicityDetector:
             ensemble_scores += weight * scores
         
         self.ensemble_weights = individual_weights
+        self.validation_scores = individual_scores
         
-        print("Detector weights:")
+        print("Detector weights (including CV performance):")
         for name, weight in sorted(individual_weights.items(), key=lambda x: x[1], reverse=True):
-            print(f"  {name}: {weight:.3f}")
+            cv_score = self.cv_results.get(name, {}).get('mean_cv_score', 0)
+            print(f"  {name}: {weight:.3f} (CV: {cv_score:.3f})")
         
         return ensemble_scores, individual_scores
     
-    def _calculate_weight(self, scores, detector_name):
-        """Weight calculation with multiple criteria"""
+    def _calculate_cv_weight(self, scores, detector_name, cv_performance):
+        """Weight calculation incorporating CV performance"""
         try:
-            # Score distribution quality
+            # Base weight from score quality
             score_std = np.std(scores)
             score_range = np.max(scores) - np.min(scores)
             separation_score = score_std * score_range
             
-            # Detection consistency
-            performance_scores = []
-            for threshold_pct in [90, 95, 99]:
-                threshold = np.percentile(scores, threshold_pct)
-                anomaly_rate = np.mean(scores > threshold)
-                expected_rate = (100 - threshold_pct) / 100
-                
-                if expected_rate > 0:
-                    rate_score = 1 - abs(anomaly_rate - expected_rate) / expected_rate
-                    performance_scores.append(max(0, rate_score))
-            
-            avg_performance = np.mean(performance_scores) if performance_scores else 0
+            # CV performance component
+            cv_score = cv_performance.get('mean_cv_score', 0)
+            cv_std = cv_performance.get('std_cv_score', 1)
+            cv_stability = 1 / (1 + cv_std) if cv_std > 0 else 1
             
             # Detector type preference
             type_bonus = 1.0
@@ -842,17 +1053,21 @@ class AdvancedToxicityDetector:
             score_volatility = np.std(np.diff(scores))
             stability_score = 1 / (1 + score_volatility)
             
-            # Combine criteria
-            weight = separation_score * avg_performance * type_bonus * stability_score
+            # Combine all criteria with CV emphasis
+            weight = (separation_score * 0.3 + 
+                        cv_score * 0.4 + 
+                        cv_stability * 0.1 + 
+                        stability_score * 0.1 + 
+                        type_bonus * 0.1)
             
             return max(0.05, min(weight, 2.0))
             
         except Exception:
             return 0.1
     
-    def evaluate_comprehensive_performance(self, X_scaled, ensemble_scores, individual_scores):
-        """Comprehensive performance evaluation"""
-        print("Evaluating comprehensive detector performance...")
+    def evaluate_comprehensive_performance_with_cv(self, X_scaled, ensemble_scores, individual_scores):
+        """Comprehensive performance evaluation including CV results"""
+        print("Evaluating comprehensive detector performance with CV analysis...")
         
         metrics = {}
         
@@ -885,6 +1100,20 @@ class AdvancedToxicityDetector:
         
         metrics['anomaly_rates'] = anomaly_rates
         
+        # Cross-validation performance analysis
+        cv_performance = {}
+        for name, cv_results in self.cv_results.items():
+            cv_performance[name] = {
+                'mean_score': cv_results['mean_cv_score'],
+                'std_score': cv_results['std_cv_score'],
+                'stability': 1 / (1 + cv_results['std_cv_score']) if cv_results['std_cv_score'] > 0 else 1,
+                'consistency': len([s for s in cv_results['fold_scores'] if s > 0]) / len(cv_results['fold_scores']),
+                'best_fold': max(cv_results['fold_scores']),
+                'worst_fold': min(cv_results['fold_scores'])
+            }
+        
+        metrics['cv_performance'] = cv_performance
+        
         # Clustering quality assessment
         clustering_scores = {}
         for name, model in self.models.items():
@@ -905,17 +1134,22 @@ class AdvancedToxicityDetector:
         
         metrics['clustering_quality'] = clustering_scores
         
-        # Individual detector performance
+        # Individual detector performance with CV integration
         individual_performance = {}
         for name, scores in individual_scores.items():
             try:
+                cv_results = self.cv_results.get(name, {})
                 performance = {
                     'mean': scores.mean(),
                     'std': scores.std(),
                     'range': scores.max() - scores.min(),
                     'weight': self.ensemble_weights.get(name, 0),
                     'consistency': self._calculate_consistency(scores),
-                    'stability': 1 / (1 + np.std(np.diff(scores)))
+                    'stability': 1 / (1 + np.std(np.diff(scores))),
+                    'cv_mean': cv_results.get('mean_cv_score', 0),
+                    'cv_std': cv_results.get('std_cv_score', 0),
+                    'cv_stability': cv_performance.get(name, {}).get('stability', 0),
+                    'cv_consistency': cv_performance.get(name, {}).get('consistency', 0)
                 }
                 individual_performance[name] = performance
             except Exception:
@@ -946,6 +1180,20 @@ class AdvancedToxicityDetector:
             except Exception:
                 pass
         
+        # Cross-validation stability metrics
+        cv_stability_metrics = {
+            'overall_cv_mean': np.mean([cv['mean_cv_score'] for cv in self.cv_results.values()]),
+            'overall_cv_std': np.mean([cv['std_cv_score'] for cv in self.cv_results.values()]),
+            'detector_consistency': np.mean([cv_performance[name]['consistency'] 
+                                            for name in cv_performance.keys()]),
+            'best_performing_detector': max(cv_performance.items(), 
+                                            key=lambda x: x[1]['mean_score'])[0] if cv_performance else None,
+            'most_stable_detector': max(cv_performance.items(), 
+                                        key=lambda x: x[1]['stability'])[0] if cv_performance else None
+        }
+        
+        metrics['cv_stability'] = cv_stability_metrics
+        
         # Feature importance metrics
         if self.feature_importance:
             metrics['feature_importance'] = dict(sorted(
@@ -969,13 +1217,13 @@ class AdvancedToxicityDetector:
         
         return np.mean(consistency_scores)
     
-    def save_model(self, save_dir="toxicity_models"):
-        """Save the model with comprehensive metadata"""
+    def save_model_with_cv_results(self, save_dir="toxicity_models"):
+        """Save the model with comprehensive metadata including CV results"""
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        model_path = f"{save_dir}/toxicity_detector_{timestamp}.joblib"
+        model_path = f"{save_dir}/toxicity_detector_cv_{timestamp}.joblib"
         
         model_package = {
             'models': self.models,
@@ -985,16 +1233,27 @@ class AdvancedToxicityDetector:
             'performance_metrics': self.performance_metrics,
             'best_hyperparameters': self.best_hyperparameters,
             'feature_importance': self.feature_importance,
+            'cv_results': self.cv_results,
+            'validation_scores': self.validation_scores,
             'timestamp': timestamp,
-            'version': '5.0_production',
+            'version': '5.0_production_cv',
             'n_features': len(self.feature_selector) if self.feature_selector else 0,
             'n_detectors': len(self.models),
+            'cv_summary': {
+                'mean_cv_performance': np.mean([cv['mean_cv_score'] for cv in self.cv_results.values()]),
+                'cv_stability': np.mean([1/(1+cv['std_cv_score']) for cv in self.cv_results.values()]),
+                'best_detector_cv': max(self.cv_results.items(), 
+                                        key=lambda x: x[1]['mean_cv_score'])[0] if self.cv_results else None,
+                'most_stable_detector_cv': min(self.cv_results.items(), 
+                                                key=lambda x: x[1]['std_cv_score'])[0] if self.cv_results else None
+            },
             'training_summary': {
                 'top_features': dict(sorted(self.feature_importance.items(), 
                                             key=lambda x: x[1], reverse=True)[:15]),
                 'detector_weights': dict(sorted(self.ensemble_weights.items(), 
                                                 key=lambda x: x[1], reverse=True)),
                 'ensemble_diversity': self.performance_metrics.get('ensemble_diversity', {}),
+                'cv_performance': self.performance_metrics.get('cv_performance', {}),
                 'best_clustering_score': max([v for k, v in self.performance_metrics.items() 
                                             if 'silhouette' in k and isinstance(v, (int, float))], 
                                             default=0),
@@ -1005,478 +1264,491 @@ class AdvancedToxicityDetector:
         
         joblib.dump(model_package, model_path)
         
-        print(f"Model saved to: {model_path}")
+        print(f"Model with CV results saved to: {model_path}")
         return model_path
 
-def create_visualizations(features_df, ensemble_scores, individual_scores, detector):
-   """Create comprehensive performance visualizations"""
-   
-   # Create plots directory
-   plots_dir = "toxicity_plots"
-   if not os.path.exists(plots_dir):
-       os.makedirs(plots_dir)
-   
-   timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-   
-   # Set publication-quality style
-   plt.style.use('ggplot')
-   plt.rcParams.update({
-       'figure.figsize': (14, 10),
-       'font.size': 11,
-       'axes.titlesize': 14,
-       'axes.labelsize': 12,
-       'legend.fontsize': 10,
-       'figure.dpi': 300,
-       'savefig.dpi': 300,
-       'savefig.bbox': 'tight'
-   })
-   
-   # 1. Comprehensive Model Performance Dashboard
-   fig, axes = plt.subplots(3, 3, figsize=(20, 15))
-   
-   # Score distribution with statistics
-   axes[0, 0].hist(ensemble_scores, bins=60, alpha=0.7, color='skyblue', edgecolor='black', density=True)
-   axes[0, 0].axvline(np.percentile(ensemble_scores, 95), color='red', linestyle='--', linewidth=2, label='95th')
-   axes[0, 0].axvline(np.percentile(ensemble_scores, 99), color='darkred', linestyle='--', linewidth=2, label='99th')
-   axes[0, 0].axvline(np.percentile(ensemble_scores, 99.5), color='purple', linestyle='--', linewidth=2, label='99.5th')
-   axes[0, 0].set_xlabel('Toxicity Score')
-   axes[0, 0].set_ylabel('Density')
-   axes[0, 0].set_title('Toxicity Score Distribution')
-   axes[0, 0].legend()
-   axes[0, 0].grid(True, alpha=0.3)
-   
-   # Detector weights
-   weights = list(detector.ensemble_weights.values())
-   detector_names = list(detector.ensemble_weights.keys())
-   sorted_items = sorted(zip(detector_names, weights), key=lambda x: x[1], reverse=True)
-   detector_names, weights = zip(*sorted_items)
-   
-   colors = plt.cm.viridis(np.linspace(0, 1, len(weights)))
-   bars = axes[0, 1].bar(range(len(weights)), weights, color=colors, alpha=0.8)
-   axes[0, 1].set_xticks(range(len(detector_names)))
-   axes[0, 1].set_xticklabels([name[:12] for name in detector_names], rotation=45, ha='right')
-   axes[0, 1].set_ylabel('Ensemble Weight')
-   axes[0, 1].set_title('Detector Weights (Sorted)')
-   axes[0, 1].grid(True, alpha=0.3, axis='y')
-   
-   # Add value labels
-   for bar, weight in zip(bars, weights):
-       axes[0, 1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.003, 
-                       f'{weight:.3f}', ha='center', va='bottom', fontsize=8)
-   
-   # Feature importance
-   if hasattr(detector, 'feature_importance') and detector.feature_importance:
-       top_features = dict(sorted(detector.feature_importance.items(), key=lambda x: x[1], reverse=True)[:12])
-       feature_names = list(top_features.keys())
-       importance_scores = list(top_features.values())
-       
-       colors_feat = plt.cm.plasma(np.linspace(0, 1, len(importance_scores)))
-       axes[0, 2].barh(range(len(feature_names)), importance_scores, color=colors_feat, alpha=0.8)
-       axes[0, 2].set_yticks(range(len(feature_names)))
-       axes[0, 2].set_yticklabels([name[:18] for name in feature_names])
-       axes[0, 2].set_xlabel('Importance Score')
-       axes[0, 2].set_title('Top 12 Feature Importance')
-       axes[0, 2].grid(True, alpha=0.3, axis='x')
-   
-   # Detection rates with separation scores
-   thresholds = [85, 90, 95, 97, 99, 99.5]
-   rates = []
-   separations = []
-   for threshold in thresholds:
-       rate = np.mean(ensemble_scores > np.percentile(ensemble_scores, threshold)) * 100
-       rates.append(rate)
-       
-       # Calculate separation
-       threshold_value = np.percentile(ensemble_scores, threshold)
-       anomaly_scores = ensemble_scores[ensemble_scores > threshold_value]
-       normal_scores = ensemble_scores[ensemble_scores <= threshold_value]
-       if len(normal_scores) > 0 and normal_scores.std() > 0:
-           separation = (anomaly_scores.mean() - normal_scores.mean()) / normal_scores.std()
-           separations.append(separation)
-       else:
-           separations.append(0)
-   
-   # Detection rates
-   bars = axes[1, 0].bar(range(len(thresholds)), rates, 
-                         color=['lightblue', 'lightgreen', 'orange', 'coral', 'red', 'darkred'], alpha=0.8)
-   axes[1, 0].set_xticks(range(len(thresholds)))
-   axes[1, 0].set_xticklabels([f'{t}th' for t in thresholds])
-   axes[1, 0].set_ylabel('Detection Rate (%)')
-   axes[1, 0].set_title('Detection Rates by Threshold')
-   axes[1, 0].grid(True, alpha=0.3, axis='y')
-   
-   for bar, rate in zip(bars, rates):
-       axes[1, 0].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.3, 
-                       f'{rate:.1f}%', ha='center', va='bottom', fontsize=9)
-   
-   # Separation scores
-   bars_sep = axes[1, 1].bar(range(len(thresholds)), separations, 
-                             color=['lightblue', 'lightgreen', 'orange', 'coral', 'red', 'darkred'], alpha=0.8)
-   axes[1, 1].set_xticks(range(len(thresholds)))
-   axes[1, 1].set_xticklabels([f'{t}th' for t in thresholds])
-   axes[1, 1].set_ylabel('Separation Score')
-   axes[1, 1].set_title('Anomaly Separation by Threshold')
-   axes[1, 1].grid(True, alpha=0.3, axis='y')
-   
-   for bar, sep in zip(bars_sep, separations):
-       axes[1, 1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.05, 
-                       f'{sep:.2f}', ha='center', va='bottom', fontsize=9)
-   
-   # Score timeline with anomaly highlights
-   axes[1, 2].plot(ensemble_scores, alpha=0.7, color='blue', linewidth=1)
-   axes[1, 2].axhline(np.percentile(ensemble_scores, 95), color='orange', linestyle='--', alpha=0.8)
-   axes[1, 2].axhline(np.percentile(ensemble_scores, 99), color='red', linestyle='--', alpha=0.8)
-   
-   # Highlight extreme anomalies
-   extreme_anomalies = np.where(ensemble_scores > np.percentile(ensemble_scores, 99.5))[0]
-   if len(extreme_anomalies) > 0:
-       axes[1, 2].scatter(extreme_anomalies, ensemble_scores[extreme_anomalies], 
-                         color='red', s=30, alpha=0.8, zorder=5)
-   
-   axes[1, 2].set_xlabel('Order Sequence')
-   axes[1, 2].set_ylabel('Toxicity Score')
-   axes[1, 2].set_title('Toxicity Timeline with Anomaly Highlights')
-   axes[1, 2].grid(True, alpha=0.3)
-   
-   # Detector correlation heatmap
-   if len(individual_scores) > 1:
-       top_detectors = sorted(detector.ensemble_weights.items(), key=lambda x: x[1], reverse=True)[:8]
-       top_detector_names = [name for name, _ in top_detectors]
-       
-       score_data = {name: individual_scores[name] for name in top_detector_names 
-                     if name in individual_scores}
-       
-       if len(score_data) > 1:
-           score_df = pd.DataFrame(score_data)
-           correlation_matrix = score_df.corr()
-           
-           im = axes[2, 0].imshow(correlation_matrix, cmap='RdBu_r', aspect='auto', vmin=-1, vmax=1)
-           
-           # Add correlation values
-           for i in range(len(correlation_matrix)):
-               for j in range(len(correlation_matrix)):
-                   if abs(correlation_matrix.iloc[i, j]) > 0.3:
-                       axes[2, 0].text(j, i, f'{correlation_matrix.iloc[i, j]:.2f}', 
-                                       ha='center', va='center', fontsize=8)
-           
-           axes[2, 0].set_xticks(range(len(top_detector_names)))
-           axes[2, 0].set_xticklabels([name[:8] for name in top_detector_names], rotation=45, ha='right')
-           axes[2, 0].set_yticks(range(len(top_detector_names)))
-           axes[2, 0].set_yticklabels([name[:8] for name in top_detector_names])
-           axes[2, 0].set_title('Detector Score Correlations')
-           
-           plt.colorbar(im, ax=axes[2, 0], shrink=0.8, label='Correlation')
-   
-   # Clustering quality comparison
-   clustering_scores = []
-   clustering_names = []
-   
-   for metric_name, value in detector.performance_metrics.items():
-       if 'silhouette' in metric_name and isinstance(value, (int, float)):
-           clustering_scores.append(value)
-           clustering_names.append(metric_name.replace('_silhouette', '').replace('_', ' ')[:10])
-   
-   if clustering_scores:
-       bars_clust = axes[2, 1].bar(range(len(clustering_names)), clustering_scores, 
-                                   color='lightgreen', alpha=0.8)
-       axes[2, 1].set_xticks(range(len(clustering_names)))
-       axes[2, 1].set_xticklabels(clustering_names, rotation=45, ha='right')
-       axes[2, 1].set_ylabel('Silhouette Score')
-       axes[2, 1].set_title('Clustering Quality by Method')
-       axes[2, 1].grid(True, alpha=0.3, axis='y')
-       
-       for bar, score in zip(bars_clust, clustering_scores):
-           axes[2, 1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01, 
-                           f'{score:.3f}', ha='center', va='bottom', fontsize=9)
-   
-   # Model performance summary
-   performance_summary = detector.performance_metrics.get('score_stats', {})
-   ensemble_diversity = detector.performance_metrics.get('ensemble_diversity', {})
-   
-   summary_text = f"""
-   MODEL SUMMARY
-   
-   Dataset: {len(ensemble_scores)} samples
-   Features: {len(detector.feature_selector) if detector.feature_selector else 0}
-   Detectors: {len(detector.models)}
-   
-   Score Statistics:
-   • Mean: {performance_summary.get('mean', 0):.3f}
-   • Std: {performance_summary.get('std', 0):.3f}
-   • Skewness: {performance_summary.get('skewness', 0):.3f}
-   
-   Ensemble Quality:
-   • Diversity: {ensemble_diversity.get('diversity_score', 0):.3f}
-   • Avg Correlation: {ensemble_diversity.get('avg_correlation', 0):.3f}
-   • Max Weight: {max(detector.ensemble_weights.values()) if detector.ensemble_weights else 0:.3f}
-   
-   Top Features:
-   """
-   
-   if hasattr(detector, 'feature_importance') and detector.feature_importance:
-       top_3_features = sorted(detector.feature_importance.items(), key=lambda x: x[1], reverse=True)[:3]
-       for i, (feature, importance) in enumerate(top_3_features, 1):
-           summary_text += f"\n    {i}. {feature[:20]}: {importance:.3f}"
-   
-   axes[2, 2].text(0.05, 0.95, summary_text, transform=axes[2, 2].transAxes, fontsize=10,
-                   verticalalignment='top', fontfamily='monospace',
-                   bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.9))
-   axes[2, 2].set_xlim(0, 1)
-   axes[2, 2].set_ylim(0, 1)
-   axes[2, 2].axis('off')
-   axes[2, 2].set_title('Model Summary', fontweight='bold')
-   
-   plt.suptitle(f'Toxicity Detection Model - Comprehensive Analysis\nTimestamp: {timestamp}', 
-               fontsize=16, fontweight='bold', y=0.98)
-   
-   plt.tight_layout()
-   plt.savefig(f"{plots_dir}/comprehensive_analysis_{timestamp}.png", dpi=300, bbox_inches='tight')
-   plt.close()
-   
-   # 2. Anomaly Characteristics Deep Dive
-   if len(features_df.columns) > 0:
-       fig, axes = plt.subplots(2, 4, figsize=(20, 12))
-       axes = axes.flatten()
-       
-       # Define multiple anomaly thresholds for comparison
-       anomaly_threshold_95 = np.percentile(ensemble_scores, 95)
-       anomaly_threshold_99 = np.percentile(ensemble_scores, 99)
-       
-       anomaly_mask_95 = ensemble_scores > anomaly_threshold_95
-       anomaly_mask_99 = ensemble_scores > anomaly_threshold_99
-       
-       key_features = ['order_size', 'volatility', 'spread', 'momentum', 'inter_arrival_time', 
-                      'arrival_rate', 'depth_ratio', 'price_aggressiveness']
-       available_features = [f for f in key_features if f in features_df.columns][:8]
-       
-       for i, feature in enumerate(available_features):
-           if i < len(axes):
-               ax = axes[i]
-               
-               normal_data = features_df[feature][~anomaly_mask_95].dropna()
-               anomaly_95_data = features_df[feature][anomaly_mask_95 & ~anomaly_mask_99].dropna()
-               anomaly_99_data = features_df[feature][anomaly_mask_99].dropna()
-               
-               if len(normal_data) > 0:
-                   ax.hist(normal_data, bins=30, alpha=0.6, label='Normal (0-95th)', 
-                          color='lightblue', density=True, edgecolor='black')
-               
-               if len(anomaly_95_data) > 0:
-                   ax.hist(anomaly_95_data, bins=30, alpha=0.6, label='Moderate (95-99th)', 
-                          color='orange', density=True, edgecolor='black')
-               
-               if len(anomaly_99_data) > 0:
-                   ax.hist(anomaly_99_data, bins=30, alpha=0.6, label='High (99th+)', 
-                          color='red', density=True, edgecolor='black')
-               
-               ax.set_xlabel(feature.replace('_', ' ').title())
-               ax.set_ylabel('Density')
-               ax.set_title(f'{feature.replace("_", " ").title()}: Multi-Level Analysis')
-               ax.legend()
-               ax.grid(True, alpha=0.3)
-               
-               # Add mean lines
-               if len(normal_data) > 0:
-                   ax.axvline(normal_data.mean(), color='blue', linestyle=':', alpha=0.8)
-               if len(anomaly_99_data) > 0:
-                   ax.axvline(anomaly_99_data.mean(), color='red', linestyle=':', alpha=0.8)
-       
-       # Remove empty subplots
-       for i in range(len(available_features), len(axes)):
-           fig.delaxes(axes[i])
-       
-       plt.suptitle('Anomaly Characteristics Analysis', fontsize=16, fontweight='bold')
-       plt.tight_layout()
-       plt.savefig(f"{plots_dir}/anomaly_characteristics_{timestamp}.png", dpi=300, bbox_inches='tight')
-       plt.close()
-   
-   print(f"Visualizations saved to: {plots_dir}")
-   
-   # List generated files
-   plot_files = [f for f in os.listdir(plots_dir) if f.endswith('.png') and timestamp in f]
-   print(f"Generated {len(plot_files)} plot files:")
-   for file in sorted(plot_files):
-       print(f"  {file}")
+def create_cv_visualizations(features_df, ensemble_scores, individual_scores, detector):
+    """Create comprehensive performance visualizations including CV results"""
+    
+    # Create plots directory
+    plots_dir = "toxicity_plots_cv"
+    if not os.path.exists(plots_dir):
+        os.makedirs(plots_dir)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Set publication-quality style
+    plt.style.use('ggplot')
+    plt.rcParams.update({
+        'figure.figsize': (14, 10),
+        'font.size': 11,
+        'axes.titlesize': 14,
+        'axes.labelsize': 12,
+        'legend.fontsize': 10,
+        'figure.dpi': 300,
+        'savefig.dpi': 300,
+        'savefig.bbox': 'tight'
+    })
+    
+    # 1. Cross-Validation Performance Dashboard
+    fig, axes = plt.subplots(3, 3, figsize=(20, 15))
+    
+    # CV scores comparison
+    cv_names = list(detector.cv_results.keys())
+    cv_means = [detector.cv_results[name]['mean_cv_score'] for name in cv_names]
+    cv_stds = [detector.cv_results[name]['std_cv_score'] for name in cv_names]
+    
+    sorted_items = sorted(zip(cv_names, cv_means, cv_stds), key=lambda x: x[1], reverse=True)
+    cv_names_sorted, cv_means_sorted, cv_stds_sorted = zip(*sorted_items)
+    
+    colors = plt.cm.viridis(np.linspace(0, 1, len(cv_names_sorted)))
+    bars = axes[0, 0].bar(range(len(cv_names_sorted)), cv_means_sorted, 
+                            yerr=cv_stds_sorted, color=colors, alpha=0.8, capsize=5)
+    axes[0, 0].set_xticks(range(len(cv_names_sorted)))
+    axes[0, 0].set_xticklabels([name[:12] for name in cv_names_sorted], rotation=45, ha='right')
+    axes[0, 0].set_ylabel('CV Score')
+    axes[0, 0].set_title('Cross-Validation Performance (Mean ± Std)')
+    axes[0, 0].grid(True, alpha=0.3, axis='y')
+    
+    # Add value labels
+    for bar, mean, std in zip(bars, cv_means_sorted, cv_stds_sorted):
+        axes[0, 0].text(bar.get_x() + bar.get_width()/2, bar.get_height() + std + 0.01, 
+                        f'{mean:.3f}', ha='center', va='bottom', fontsize=8)
+    
+    # CV stability vs performance scatter
+    cv_performance = detector.performance_metrics.get('cv_performance', {})
+    if cv_performance:
+        stabilities = [cv_performance[name]['stability'] for name in cv_performance.keys()]
+        means = [cv_performance[name]['mean_score'] for name in cv_performance.keys()]
+        consistencies = [cv_performance[name]['consistency'] for name in cv_performance.keys()]
+        
+        scatter = axes[0, 1].scatter(stabilities, means, c=consistencies, 
+                                    s=100, alpha=0.7, cmap='plasma')
+        axes[0, 1].set_xlabel('CV Stability')
+        axes[0, 1].set_ylabel('CV Mean Score')
+        axes[0, 1].set_title('CV Performance vs Stability')
+        axes[0, 1].grid(True, alpha=0.3)
+        
+        # Add detector labels
+        for name, x, y in zip(cv_performance.keys(), stabilities, means):
+            axes[0, 1].annotate(name[:8], (x, y), xytext=(5, 5), 
+                                textcoords='offset points', fontsize=8)
+        
+        plt.colorbar(scatter, ax=axes[0, 1], label='Consistency')
+    
+    # Ensemble weights vs CV performance
+    weights = list(detector.ensemble_weights.values())
+    detector_names = list(detector.ensemble_weights.keys())
+    cv_scores = [detector.cv_results.get(name, {}).get('mean_cv_score', 0) for name in detector_names]
+    
+    axes[0, 2].scatter(cv_scores, weights, alpha=0.7, s=100, color='orange')
+    axes[0, 2].set_xlabel('CV Score')
+    axes[0, 2].set_ylabel('Ensemble Weight')
+    axes[0, 2].set_title('Ensemble Weight vs CV Performance')
+    axes[0, 2].grid(True, alpha=0.3)
+    
+    # Add trend line
+    if len(cv_scores) > 1:
+        z = np.polyfit(cv_scores, weights, 1)
+        p = np.poly1d(z)
+        axes[0, 2].plot(sorted(cv_scores), p(sorted(cv_scores)), "r--", alpha=0.8)
+    
+    # Fold-wise performance heatmap
+    if detector.cv_results:
+        fold_data = []
+        detector_labels = []
+        
+        for name, results in detector.cv_results.items():
+            fold_scores = results.get('fold_scores', [])
+            if fold_scores:
+                fold_data.append(fold_scores)
+                detector_labels.append(name[:10])
+        
+        if fold_data:
+            fold_matrix = np.array(fold_data)
+            im = axes[1, 0].imshow(fold_matrix, cmap='RdYlBu_r', aspect='auto')
+            
+            axes[1, 0].set_yticks(range(len(detector_labels)))
+            axes[1, 0].set_yticklabels(detector_labels)
+            axes[1, 0].set_xlabel('CV Fold')
+            axes[1, 0].set_title('Fold-wise Performance Heatmap')
+            
+            # Add values to heatmap
+            for i in range(fold_matrix.shape[0]):
+                for j in range(fold_matrix.shape[1]):
+                    if not np.isnan(fold_matrix[i, j]):
+                        axes[1, 0].text(j, i, f'{fold_matrix[i, j]:.2f}', 
+                                        ha='center', va='center', fontsize=8)
+            
+            plt.colorbar(im, ax=axes[1, 0], label='CV Score')
+    
+    # Score distribution with CV quartiles
+    axes[1, 1].hist(ensemble_scores, bins=60, alpha=0.7, color='skyblue', 
+                    edgecolor='black', density=True)
+    axes[1, 1].axvline(np.percentile(ensemble_scores, 95), color='red', 
+                        linestyle='--', linewidth=2, label='95th')
+    axes[1, 1].axvline(np.percentile(ensemble_scores, 99), color='darkred', 
+                        linestyle='--', linewidth=2, label='99th')
+    axes[1, 1].set_xlabel('Toxicity Score')
+    axes[1, 1].set_ylabel('Density')
+    axes[1, 1].set_title('Toxicity Score Distribution')
+    axes[1, 1].legend()
+    axes[1, 1].grid(True, alpha=0.3)
+    
+    # CV consistency analysis
+    if cv_performance:
+        consistencies = [cv_performance[name]['consistency'] for name in cv_performance.keys()]
+        names = list(cv_performance.keys())
+        
+        sorted_consist = sorted(zip(names, consistencies), key=lambda x: x[1], reverse=True)
+        names_sorted, consist_sorted = zip(*sorted_consist)
+        
+        bars = axes[1, 2].bar(range(len(names_sorted)), consist_sorted, 
+                                color='lightgreen', alpha=0.8)
+        axes[1, 2].set_xticks(range(len(names_sorted)))
+        axes[1, 2].set_xticklabels([name[:10] for name in names_sorted], rotation=45, ha='right')
+        axes[1, 2].set_ylabel('Consistency Score')
+        axes[1, 2].set_title('CV Consistency by Detector')
+        axes[1, 2].grid(True, alpha=0.3, axis='y')
+        
+        for bar, consist in zip(bars, consist_sorted):
+            axes[1, 2].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01, 
+                            f'{consist:.2f}', ha='center', va='bottom', fontsize=8)
+    
+    # Feature importance with CV validation
+    if hasattr(detector, 'feature_importance') and detector.feature_importance:
+        top_features = dict(sorted(detector.feature_importance.items(), 
+                                    key=lambda x: x[1], reverse=True)[:12])
+        feature_names = list(top_features.keys())
+        importance_scores = list(top_features.values())
+        
+        colors_feat = plt.cm.plasma(np.linspace(0, 1, len(importance_scores)))
+        axes[2, 0].barh(range(len(feature_names)), importance_scores, 
+                        color=colors_feat, alpha=0.8)
+        axes[2, 0].set_yticks(range(len(feature_names)))
+        axes[2, 0].set_yticklabels([name[:18] for name in feature_names])
+        axes[2, 0].set_xlabel('Importance Score')
+        axes[2, 0].set_title('Top 12 Feature Importance')
+        axes[2, 0].grid(True, alpha=0.3, axis='x')
+    
+    # CV stability ranking
+    if cv_performance:
+        stabilities = [(name, cv_performance[name]['stability']) for name in cv_performance.keys()]
+        stabilities.sort(key=lambda x: x[1], reverse=True)
+        
+        names, stab_scores = zip(*stabilities)
+        
+        bars = axes[2, 1].bar(range(len(names)), stab_scores, color='coral', alpha=0.8)
+        axes[2, 1].set_xticks(range(len(names)))
+        axes[2, 1].set_xticklabels([name[:10] for name in names], rotation=45, ha='right')
+        axes[2, 1].set_ylabel('Stability Score')
+        axes[2, 1].set_title('CV Stability Ranking')
+        axes[2, 1].grid(True, alpha=0.3, axis='y')
+        
+        for bar, stab in zip(bars, stab_scores):
+            axes[2, 1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01, 
+                            f'{stab:.3f}', ha='center', va='bottom', fontsize=8)
+    
+    # Model performance summary with CV
+    cv_summary = detector.performance_metrics.get('cv_stability', {})
+    performance_summary = detector.performance_metrics.get('score_stats', {})
+    
+    summary_text = f"""
+    MODEL SUMMARY (with Cross-Validation)
+    
+    Dataset: {len(ensemble_scores)} samples
+    Features: {len(detector.feature_selector) if detector.feature_selector else 0}
+    Detectors: {len(detector.models)}
+    CV Folds: 5
+    
+    Score Statistics:
+    • Mean: {performance_summary.get('mean', 0):.3f}
+    • Std: {performance_summary.get('std', 0):.3f}
+    • Skewness: {performance_summary.get('skewness', 0):.3f}
+    
+    Cross-Validation Results:
+    • Overall CV Mean: {cv_summary.get('overall_cv_mean', 0):.3f}
+    • Overall CV Std: {cv_summary.get('overall_cv_std', 0):.3f}
+    • Detector Consistency: {cv_summary.get('detector_consistency', 0):.3f}
+    • Best Detector: {cv_summary.get('best_performing_detector', 'N/A')[:15]}
+    • Most Stable: {cv_summary.get('most_stable_detector', 'N/A')[:15]}
+    
+    Top CV Performers:
+    """
+    
+    if cv_performance:
+        top_cv = sorted(cv_performance.items(), key=lambda x: x[1]['mean_score'], reverse=True)[:3]
+        for i, (name, perf) in enumerate(top_cv, 1):
+            summary_text += f"\n    {i}. {name[:15]}: {perf['mean_score']:.3f}"
+    
+    axes[2, 2].text(0.05, 0.95, summary_text, transform=axes[2, 2].transAxes, fontsize=10,
+                    verticalalignment='top', fontfamily='monospace',
+                    bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.9))
+    axes[2, 2].set_xlim(0, 1)
+    axes[2, 2].set_ylim(0, 1)
+    axes[2, 2].axis('off')
+    axes[2, 2].set_title('CV Model Summary', fontweight='bold')
+    
+    plt.suptitle(f'Toxicity Detection Model - Cross-Validation Analysis\nTimestamp: {timestamp}', 
+                fontsize=16, fontweight='bold', y=0.98)
+    
+    plt.tight_layout()
+    plt.savefig(f"{plots_dir}/cv_comprehensive_analysis_{timestamp}.png", dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 2. Detailed CV Performance Analysis
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    axes = axes.flatten()
+    
+    # CV score distributions by detector type
+    detector_types = {}
+    for name, results in detector.cv_results.items():
+        detector_type = name.split('_')[0]
+        if detector_type not in detector_types:
+            detector_types[detector_type] = []
+        detector_types[detector_type].extend(results['fold_scores'])
+    
+    ax_idx = 0
+    for detector_type, scores in detector_types.items():
+        if ax_idx < len(axes) and scores:
+            axes[ax_idx].hist(scores, bins=20, alpha=0.7, label=detector_type, 
+                            color=plt.cm.Set3(ax_idx))
+            axes[ax_idx].axvline(np.mean(scores), color='red', linestyle='--', 
+                                label=f'Mean: {np.mean(scores):.3f}')
+            axes[ax_idx].set_xlabel('CV Score')
+            axes[ax_idx].set_ylabel('Frequency')
+            axes[ax_idx].set_title(f'{detector_type.title()} CV Score Distribution')
+            axes[ax_idx].legend()
+            axes[ax_idx].grid(True, alpha=0.3)
+            ax_idx += 1
+    
+    # Remove empty subplots
+    for i in range(ax_idx, len(axes)):
+        fig.delaxes(axes[i])
+    
+    plt.suptitle('Detector Type CV Performance Analysis', fontsize=16, fontweight='bold')
+    plt.tight_layout()
+    plt.savefig(f"{plots_dir}/cv_detector_analysis_{timestamp}.png", dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"CV visualisations saved to: {plots_dir}")
+    
+    # List generated files
+    plot_files = [f for f in os.listdir(plots_dir) if f.endswith('.png') and timestamp in f]
+    print(f"Generated {len(plot_files)} CV plot files:")
+    for file in sorted(plot_files):
+        print(f"  {file}")
 
-def main_training_pipeline(data_dir="market_data", n_trials=30):
-   """Training pipeline for toxicity detection"""
-   print("="*80)
-   print("MARKET TOXICITY DETECTION MODEL TRAINING")
-   print("Advanced Feature Engineering & Ensemble Methods")
-   print("="*80)
-   
-   # Step 1: Load market data
-   print("\n1. LOADING MARKET DATA")
-   print("-" * 40)
-   
-   feature_engineer = MarketDataFeatureEngineer()
-   orders_df, lob_df, trades_df = feature_engineer.load_market_data(data_dir)
-   
-   print(f"\nData Summary:")
-   print(f"  Orders: {len(orders_df)} records")
-   print(f"  LOB Snapshots: {len(lob_df)} records")
-   print(f"  Trades: {len(trades_df)} records")
-   
-   # Step 2: Feature extraction
-   print("\n2. FEATURE EXTRACTION")
-   print("-" * 40)
-   
-   features_df = feature_engineer.extract_features(orders_df, lob_df, trades_df)
-   
-   # Step 3: Advanced feature preparation
-   print("\n3. ADVANCED FEATURE PREPARATION")
-   print("-" * 40)
-   
-   detector = AdvancedToxicityDetector()
-   X_scaled, selected_features = detector.prepare_features(features_df)
-   
-   print(f"Final feature set: {X_scaled.shape}")
-   
-   # Step 4: Hyperparameter optimization
-   print("\n4. HYPERPARAMETER OPTIMIZATION")
-   print("-" * 40)
-   
-   best_params = detector.optimize_hyperparameters(X_scaled, n_trials=n_trials)
-   
-   # Step 5: Train ensemble
-   print("\n5. TRAINING ENSEMBLE")
-   print("-" * 40)
-   
-   detectors = detector.train_ensemble(X_scaled, best_params)
-   
-   # Step 6: Calculate ensemble scores
-   print("\n6. CALCULATING ENSEMBLE SCORES")
-   print("-" * 40)
-   
-   ensemble_scores, individual_scores = detector.calculate_ensemble_scores(X_scaled)
-   
-   # Step 7: Comprehensive performance evaluation
-   print("\n7. COMPREHENSIVE PERFORMANCE EVALUATION")
-   print("-" * 40)
-   
-   metrics = detector.evaluate_comprehensive_performance(X_scaled, ensemble_scores, individual_scores)
-   
-   # Step 8: Generate visualizations
-   print("\n8. GENERATING VISUALIZATIONS")
-   print("-" * 40)
-   
-   create_visualizations(selected_features, ensemble_scores, individual_scores, detector)
-   
-   # Step 9: Save model
-   print("\n9. SAVING  MODEL")
-   print("-" * 40)
-   
-   model_path = detector.save_model()
-   
-   # Print comprehensive results summary
-   print("\n" + "="*80)
-   print(" TRAINING COMPLETED SUCCESSFULLY")
-   print("="*80)
-   
-   print(f"\n MODEL PERFORMANCE SUMMARY:")
-   anomaly_detection = metrics.get('anomaly_rates', {})
-   score_stats = metrics.get('score_stats', {})
-   diversity_stats = metrics.get('ensemble_diversity', {})
-   
-   print(f"  Dataset Size: {X_scaled.shape[0]} samples, {X_scaled.shape[1]} features")
-   print(f"  Ensemble: {len(detector.models)} detectors")
-   print(f"  Effective Contributors: {len([w for w in detector.ensemble_weights.values() if w > 0.05])} detectors")
-   
-   print(f"\n ANOMALY DETECTION PERFORMANCE:")
-   for threshold in [90, 95, 97, 99]:
-       rate = anomaly_detection.get(f'{threshold}th_percentile', 0)
-       separation = anomaly_detection.get(f'{threshold}th_separation', 0)
-       print(f"  {threshold}th percentile: {rate*100:.2f}% detection rate, {separation:.3f} separation score")
-   
-   print(f"\nSCORE DISTRIBUTION QUALITY:")
-   print(f"  Mean: {score_stats.get('mean', 0):.4f}")
-   print(f"  Std: {score_stats.get('std', 0):.4f}")
-   print(f"  Skewness: {score_stats.get('skewness', 0):.3f}")
-   print(f"  Kurtosis: {score_stats.get('kurtosis', 0):.3f}")
-   print(f"  IQR: {score_stats.get('iqr', 0):.4f}")
-   
-   print(f"\n ENSEMBLE QUALITY:")
-   print(f"  Diversity Score: {diversity_stats.get('diversity_score', 0):.3f}/1.0")
-   print(f"  Average Correlation: {diversity_stats.get('avg_correlation', 0):.3f}")
-   print(f"  Correlation Std: {diversity_stats.get('correlation_std', 0):.3f}")
-   print(f"  Pairwise Disagreement: {diversity_stats.get('pairwise_disagreement', 0):.3f}")
-   print(f"  Max Individual Weight: {max(detector.ensemble_weights.values()) if detector.ensemble_weights else 0:.3f}")
-   
-   print(f"\nTOP PERFORMING DETECTORS:")
-   top_detectors = sorted(detector.ensemble_weights.items(), key=lambda x: x[1], reverse=True)[:5]
-   for i, (name, weight) in enumerate(top_detectors, 1):
-       print(f"  {i}. {name.replace('_', ' ').title()}: {weight:.3f}")
-   
-   print(f"\nOPTIMIZED HYPERPARAMETERS:")
-   for param, value in best_params.items():
-       print(f"  {param.replace('_', ' ').title()}: {value}")
-   
-   print(f"\nTOP FEATURES FOR TOXICITY DETECTION:")
-   if hasattr(detector, 'feature_importance') and detector.feature_importance:
-       top_features = sorted(detector.feature_importance.items(), key=lambda x: x[1], reverse=True)[:8]
-       for i, (feature, importance) in enumerate(top_features, 1):
-           print(f"  {i}. {feature.replace('_', ' ').title()}: {importance:.4f}")
-   
-   print(f"\nCLUSTERING QUALITY ASSESSMENT:")
-   clustering_quality = metrics.get('clustering_quality', {})
-   if clustering_quality:
-       for detector_name, score in sorted(clustering_quality.items(), key=lambda x: x[1], reverse=True):
-           if 'silhouette' in detector_name:
-               print(f"  {detector_name.replace('_', ' ').title()}: {score:.3f}")
-   
-   print(f"\nMODEL OUTPUTS:")
-   print(f" - Model: {model_path}")
-   print(f" - Visualizations: toxicity_plots/")
-   print(f" - Training Timestamp: {detector.performance_metrics.get('timestamp', 'N/A')}")
-   print(f" - Superior toxicity detection with {len(detector.models)} ensemble detectors")
-   print(f" - Advanced feature engineering with {len(detector.feature_selector)} optimized features")
-   print(f" - Anomaly separation with avg separation score: {np.mean([v for k, v in anomaly_detection.items() if 'separation' in k]):.3f}")
-   print(f" - High ensemble diversity score: {diversity_stats.get('diversity_score', 0):.3f}")
-   
-   return detector, ensemble_scores, metrics
+def main_training_pipeline_with_cv(data_dir="market_data", n_trials=30, cv_folds=5):
+    """Enhanced training pipeline with comprehensive cross-validation"""
+    print("="*80)
+    print("MARKET TOXICITY DETECTION MODEL TRAINING WITH CROSS-VALIDATION")
+    print("Advanced Feature Engineering & Ensemble Methods with CV")
+    print("="*80)
+    
+    # Step 1: Load market data
+    print("\n1. LOADING MARKET DATA")
+    print("-" * 40)
+    
+    feature_engineer = MarketDataFeatureEngineer()
+    orders_df, lob_df, trades_df = feature_engineer.load_market_data(data_dir)
+    
+    print(f"\nData Summary:")
+    print(f"  Orders: {len(orders_df)} records")
+    print(f"  LOB Snapshots: {len(lob_df)} records")
+    print(f"  Trades: {len(trades_df)} records")
+    
+    # Step 2: Feature extraction
+    print("\n2. FEATURE EXTRACTION")
+    print("-" * 40)
+    
+    features_df = feature_engineer.extract_features(orders_df, lob_df, trades_df)
+    
+    # Step 3: Advanced feature preparation
+    print("\n3. ADVANCED FEATURE PREPARATION")
+    print("-" * 40)
+    
+    detector = AdvancedToxicityDetector()
+    X_scaled, selected_features = detector.prepare_features(features_df)
+    
+    print(f"Final feature set: {X_scaled.shape}")
+    
+    # Step 4: Hyperparameter optimization with CV
+    print("\n4. HYPERPARAMETER OPTIMIZATION WITH CROSS-VALIDATION")
+    print("-" * 40)
+    
+    best_params = detector.optimize_hyperparameters_with_cv(X_scaled, n_trials=n_trials, cv_folds=cv_folds)
+    
+    # Step 5: Train ensemble with CV
+    print("\n5. TRAINING ENSEMBLE WITH CROSS-VALIDATION")
+    print("-" * 40)
+    
+    detectors = detector.train_ensemble_with_cv(X_scaled, best_params, cv_folds=cv_folds)
+    
+    # Step 6: Calculate ensemble scores with validation
+    print("\n6. CALCULATING ENSEMBLE SCORES WITH VALIDATION")
+    print("-" * 40)
+    
+    ensemble_scores, individual_scores = detector.calculate_ensemble_scores_with_validation(X_scaled)
+    
+    # Step 7: Comprehensive performance evaluation with CV
+    print("\n7. COMPREHENSIVE PERFORMANCE EVALUATION WITH CV")
+    print("-" * 40)
+    
+    metrics = detector.evaluate_comprehensive_performance_with_cv(X_scaled, ensemble_scores, individual_scores)
+    
+    # Step 8: Generate CV visualisations
+    print("\n8. GENERATING CV VISUALISATIONS")
+    print("-" * 40)
+    
+    create_cv_visualizations(selected_features, ensemble_scores, individual_scores, detector)
+    
+    # Step 9: Save model with CV results
+    print("\n9. SAVING MODEL WITH CV RESULTS")
+    print("-" * 40)
+    
+    model_path = detector.save_model_with_cv_results()
+    
+    # Print comprehensive results summary
+    print("\n" + "="*80)
+    print(" CROSS-VALIDATION TRAINING COMPLETED SUCCESSFULLY")
+    print("="*80)
+    
+    print(f"\n MODEL PERFORMANCE SUMMARY (with Cross-Validation):")
+    anomaly_detection = metrics.get('anomaly_rates', {})
+    score_stats = metrics.get('score_stats', {})
+    diversity_stats = metrics.get('ensemble_diversity', {})
+    cv_stability = metrics.get('cv_stability', {})
+    cv_performance = metrics.get('cv_performance', {})
+    
+    print(f"  Dataset Size: {X_scaled.shape[0]} samples, {X_scaled.shape[1]} features")
+    print(f"  Ensemble: {len(detector.models)} detectors")
+    print(f"  CV Folds: {cv_folds}")
+    print(f"  Effective Contributors: {len([w for w in detector.ensemble_weights.values() if w > 0.05])} detectors")
+    
+    print(f"\n CROSS-VALIDATION PERFORMANCE:")
+    print(f"  Overall CV Mean: {cv_stability.get('overall_cv_mean', 0):.4f}")
+    print(f"  Overall CV Std: {cv_stability.get('overall_cv_std', 0):.4f}")
+    print(f"  Detector Consistency: {cv_stability.get('detector_consistency', 0):.4f}")
+    print(f"  Best Performing Detector: {cv_stability.get('best_performing_detector', 'N/A')}")
+    print(f"  Most Stable Detector: {cv_stability.get('most_stable_detector', 'N/A')}")
+    
+    print(f"\n ANOMALY DETECTION PERFORMANCE:")
+    for threshold in [90, 95, 97, 99]:
+        rate = anomaly_detection.get(f'{threshold}th_percentile', 0)
+        separation = anomaly_detection.get(f'{threshold}th_separation', 0)
+        print(f"  {threshold}th percentile: {rate*100:.2f}% detection rate, {separation:.3f} separation score")
+    
+    print(f"\nSCORE DISTRIBUTION QUALITY:")
+    print(f"  Mean: {score_stats.get('mean', 0):.4f}")
+    print(f"  Std: {score_stats.get('std', 0):.4f}")
+    print(f"  Skewness: {score_stats.get('skewness', 0):.3f}")
+    print(f"  Kurtosis: {score_stats.get('kurtosis', 0):.3f}")
+    print(f"  IQR: {score_stats.get('iqr', 0):.4f}")
+    
+    print(f"\n ENSEMBLE QUALITY:")
+    print(f"  Diversity Score: {diversity_stats.get('diversity_score', 0):.3f}/1.0")
+    print(f"  Average Correlation: {diversity_stats.get('avg_correlation', 0):.3f}")
+    print(f"  Correlation Std: {diversity_stats.get('correlation_std', 0):.3f}")
+    print(f"  Pairwise Disagreement: {diversity_stats.get('pairwise_disagreement', 0):.3f}")
+    print(f"  Max Individual Weight: {max(detector.ensemble_weights.values()) if detector.ensemble_weights else 0:.3f}")
+    
+    print(f"\nTOP PERFORMING DETECTORS (CV-based):")
+    # Fixed the KeyError by using the correct key names
+    if cv_performance:
+        top_cv_detectors = sorted([(name, perf['mean_score'], perf['stability']) 
+                                  for name, perf in cv_performance.items()], 
+                                 key=lambda x: x[1], reverse=True)[:5]
+        for i, (name, cv_score, stability) in enumerate(top_cv_detectors, 1):
+            weight = detector.ensemble_weights.get(name, 0)
+            print(f"  {i}. {name.replace('_', ' ').title()}: CV={cv_score:.3f}, Stability={stability:.3f}, Weight={weight:.3f}")
+    else:
+        print("  No CV performance data available")
+    
+    print(f"\nOPTIMISED HYPERPARAMETERS:")
+    for param, value in best_params.items():
+        print(f"  {param.replace('_', ' ').title()}: {value}")
+    
+    print(f"\nTOP FEATURES FOR TOXICITY DETECTION:")
+    if hasattr(detector, 'feature_importance') and detector.feature_importance:
+        top_features = sorted(detector.feature_importance.items(), key=lambda x: x[1], reverse=True)[:8]
+        for i, (feature, importance) in enumerate(top_features, 1):
+            print(f"  {i}. {feature.replace('_', ' ').title()}: {importance:.4f}")
+    
+    print(f"\nCLUSTERING QUALITY ASSESSMENT:")
+    clustering_quality = metrics.get('clustering_quality', {})
+    if clustering_quality:
+        for detector_name, score in sorted(clustering_quality.items(), key=lambda x: x[1], reverse=True):
+            if 'silhouette' in detector_name:
+                print(f"  {detector_name.replace('_', ' ').title()}: {score:.3f}")
+    
+    print(f"\nCROSS-VALIDATION INSIGHTS:")
+    if cv_performance:
+        most_consistent = max(cv_performance.items(), key=lambda x: x[1]['consistency'])[0]
+        highest_cv = max([p['mean_score'] for p in cv_performance.values()])
+        avg_stability = np.mean([p['stability'] for p in cv_performance.values()])
+        
+        print(f"  Most Consistent Detector: {most_consistent}")
+        print(f"  Highest CV Score: {highest_cv:.3f}")
+        print(f"  Average CV Stability: {avg_stability:.3f}")
+    else:
+        print("  No CV performance insights available")
+    
+    print(f"\nMODEL OUTPUTS:")
+    print(f" - Model with CV: {model_path}")
+    print(f" - CV Visualisations: toxicity_plots_cv/")
+    print(f" - Training Timestamp: {detector.performance_metrics.get('timestamp', 'N/A')}")
+    print(f" - Superior toxicity detection with {len(detector.models)} CV-validated ensemble detectors")
+    print(f" - Advanced feature engineering with {len(detector.feature_selector)} optimised features")
+    print(f" - Cross-validated anomaly separation with avg CV score: {cv_stability.get('overall_cv_mean', 0):.3f}")
+    print(f" - High ensemble diversity score: {diversity_stats.get('diversity_score', 0):.3f}")
+    print(f" - CV-validated model stability: {cv_stability.get('overall_cv_std', 0):.3f}")
+    
+    return detector, ensemble_scores, metrics
 
-# Main execution
+
 if __name__ == "__main__":
-   try:
-       # Check data directory
-       data_dir = "market_data"
-       if not os.path.exists(data_dir):
-           raise FileNotFoundError(f"Data directory '{data_dir}' not found.")
-       
-       # List available data files
-       order_files = glob.glob(f"{data_dir}/orders_*.csv")
-       lob_files = glob.glob(f"{data_dir}/lob_snapshots_*.csv")
-       trade_files = glob.glob(f"{data_dir}/trades_*.csv")
-       
-       print("Starting toxicity detection model training...")
-       print(f"\nFound data files:")
-       print(f"  Order files: {len(order_files)}")
-       for f in order_files:
-           print(f"    - {os.path.basename(f)}")
-       print(f"  LOB files: {len(lob_files)}")
-       for f in lob_files:
-           print(f"    - {os.path.basename(f)}")
-       print(f"  Trade files: {len(trade_files)}")
-       for f in trade_files:
-           print(f"    - {os.path.basename(f)}")
-       
-       if not order_files:
-           raise FileNotFoundError("No order files found. Expected files like 'orders_20250621_015122.csv'")
-       
-       # Train the model
-       detector, scores, metrics = main_training_pipeline(
-           data_dir=data_dir,
-           n_trials=40
-       )
-       
-       print("\n" + "="*80)
-       print("SUCCESS: Training completed!")
-       print("="*80)
-       
-   except FileNotFoundError as e:
-         print(f"File Error: {e}")
-       
-   except Exception as e:
-       print(f"Training Error: {e}")
-       import traceback
-       traceback.print_exc()
+    try:
+        # Check data directory
+        data_dir = "market_data"
+        if not os.path.exists(data_dir):
+            raise FileNotFoundError(f"Data directory '{data_dir}' not found.")
+        
+        # List available data files
+        order_files = glob.glob(f"{data_dir}/orders_*.csv")
+        lob_files = glob.glob(f"{data_dir}/lob_snapshots_*.csv")
+        trade_files = glob.glob(f"{data_dir}/trades_*.csv")
+        
+        print("Starting toxicity detection model training with cross-validation...")
+        print(f"\nFound data files:")
+        print(f"  Order files: {len(order_files)}")
+        for f in order_files:
+            print(f"    - {os.path.basename(f)}")
+        print(f"  LOB files: {len(lob_files)}")
+        for f in lob_files:
+            print(f"    - {os.path.basename(f)}")
+        print(f"  Trade files: {len(trade_files)}")
+        for f in trade_files:
+            print(f"    - {os.path.basename(f)}")
+        
+        if not order_files:
+            raise FileNotFoundError("No order files found. Expected files like 'orders_20250621_015122.csv'")
+        
+        # Train the model with cross-validation
+        detector, scores, metrics = main_training_pipeline_with_cv(
+            data_dir=data_dir,
+            n_trials=40,
+            cv_folds=5
+        )
+        
+        print("\n" + "="*80)
+        print("SUCCESS: Cross-Validation Training completed!")
+        print("="*80)
+        
+    except FileNotFoundError as e:
+        print(f"File Error: {e}")
+    
+    except Exception as e:
+        print(f"Training Error: {e}")
+        import traceback
+        traceback.print_exc()
