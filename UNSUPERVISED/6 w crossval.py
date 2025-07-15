@@ -1024,26 +1024,36 @@ class AdvancedToxicityDetector:
         return ensemble_scores, individual_scores
     
     def _calculate_cv_weight(self, scores, detector_name, cv_performance):
-        """Weight calculation incorporating CV performance"""
+        """Enhanced weight calculation with numerical stability"""
         try:
             # Base weight from score quality
             score_std = np.std(scores)
             score_range = np.max(scores) - np.min(scores)
             separation_score = score_std * score_range
             
-            # CV performance component
+            # CV performance component with numerical stability
             cv_score = cv_performance.get('mean_cv_score', 0)
             cv_std = cv_performance.get('std_cv_score', 1)
-            cv_stability = 1 / (1 + cv_std) if cv_std > 0 else 1
             
-            # Detector type preference
+            # Handle extreme values and numerical instability
+            if cv_score > 1e6 or np.isnan(cv_score) or np.isinf(cv_score):
+                cv_score = np.log1p(cv_score) if cv_score > 0 else 0
+            
+            # Normalize CV score to prevent dominance
+            cv_score = min(cv_score, 100)  # Cap at reasonable value
+            
+            cv_stability = 1 / (1 + cv_std) if cv_std > 0 and cv_std < 1e6 else 0.1
+            
+            # Detector type preference with LOF penalty for instability
             type_bonus = 1.0
             if 'isolation_forest' in detector_name:
-                type_bonus = 1.1
+                type_bonus = 1.2  # Prefer stable isolation forest
             elif 'lof' in detector_name:
-                type_bonus = 1.05
+                type_bonus = 0.8  # Penalize LOF for numerical instability
             elif 'svm' in detector_name:
-                type_bonus = 1.02
+                type_bonus = 1.1
+            elif 'kmeans' in detector_name:
+                type_bonus = 1.15  # Prefer stable k-means
             elif 'gmm' in detector_name:
                 type_bonus = 1.0
             elif 'dbscan' in detector_name:
@@ -1053,17 +1063,20 @@ class AdvancedToxicityDetector:
             score_volatility = np.std(np.diff(scores))
             stability_score = 1 / (1 + score_volatility)
             
-            # Combine all criteria with CV emphasis
-            weight = (separation_score * 0.3 + 
-                        cv_score * 0.4 + 
-                        cv_stability * 0.1 + 
-                        stability_score * 0.1 + 
-                        type_bonus * 0.1)
+            # Enhanced combination with stability emphasis
+            normalized_cv_score = cv_score / (1 + cv_score)  # Normalize to [0,1]
             
-            return max(0.05, min(weight, 2.0))
+            weight = (separation_score * 0.25 + 
+                    normalized_cv_score * 0.15 +  # Reduced CV weight due to instability
+                    cv_stability * 0.25 +         # Increased stability weight
+                    stability_score * 0.15 + 
+                    type_bonus * 0.2)             # Increased type preference
+            
+            return max(0.01, min(weight, 1.5))  # More conservative bounds
             
         except Exception:
-            return 0.1
+            return 0.05
+
     
     def evaluate_comprehensive_performance_with_cv(self, X_scaled, ensemble_scores, individual_scores):
         """Comprehensive performance evaluation including CV results"""
@@ -1539,6 +1552,151 @@ def create_cv_visualizations(features_df, ensemble_scores, individual_scores, de
     for file in sorted(plot_files):
         print(f"  {file}")
 
+def main_training_pipeline_with_cv_enhanced(data_dir="market_data", n_trials=30, cv_folds=5):
+    """Enhanced training pipeline with comprehensive analysis"""
+    
+    # Run the original pipeline
+    detector, ensemble_scores, metrics = main_training_pipeline_with_cv(data_dir, n_trials, cv_folds)
+    
+    # Add enhanced analysis
+    create_enhanced_summary_report(detector, ensemble_scores, metrics)
+    
+    return detector, ensemble_scores, metrics
+
+def create_enhanced_summary_report(detector, ensemble_scores, metrics):
+    """Create an enhanced summary report with actionable insights"""
+    
+    print("\n" + "="*80)
+    print(" ENHANCED MODEL ANALYSIS & RECOMMENDATIONS")
+    print("="*80)
+    
+    # Performance tier analysis
+    cv_performance = metrics.get('cv_performance', {})
+    
+    stable_detectors = []
+    unstable_detectors = []
+    
+    for name, perf in cv_performance.items():
+        if perf['stability'] > 0.5 and perf['mean_score'] < 1000:
+            stable_detectors.append((name, perf))
+        else:
+            unstable_detectors.append((name, perf))
+    
+    print(f"\n DETECTOR STABILITY ANALYSIS:")
+    print(f"  Stable Detectors: {len(stable_detectors)}")
+    print(f"  Unstable Detectors: {len(unstable_detectors)}")
+    
+    print(f"\n STABLE DETECTORS (Recommended for production):")
+    for name, perf in sorted(stable_detectors, key=lambda x: x[1]['mean_score'], reverse=True)[:5]:
+        weight = detector.ensemble_weights.get(name, 0)
+        print(f"  • {name.replace('_', ' ').title()}: Weight={weight:.3f}, CV={perf['mean_score']:.3f}, Stability={perf['stability']:.3f}")
+    
+    print(f"\n UNSTABLE DETECTORS (Require attention):")
+    for name, perf in unstable_detectors[:3]:
+        weight = detector.ensemble_weights.get(name, 0)
+        print(f"  • {name.replace('_', ' ').title()}: Weight={weight:.3f}, CV={perf['mean_score']:.1e}, Stability={perf['stability']:.3f}")
+    
+    # Feature importance insights
+    print(f"\n TOP MARKET MANIPULATION INDICATORS:")
+    if hasattr(detector, 'feature_importance') and detector.feature_importance:
+        top_features = sorted(detector.feature_importance.items(), key=lambda x: x[1], reverse=True)[:8]
+        for i, (feature, importance) in enumerate(top_features, 1):
+            feature_type = ""
+            if 'size' in feature.lower():
+                feature_type = "[ORDER SIZE]"
+            elif 'arrival' in feature.lower():
+                feature_type = "[TIMING]"
+            elif 'depth' in feature.lower():
+                feature_type = "[MARKET DEPTH]"
+            elif 'spread' in feature.lower():
+                feature_type = "[SPREAD]"
+            elif 'volatility' in feature.lower():
+                feature_type = "[VOLATILITY]"
+            
+            print(f"  {i}. {feature.replace('_', ' ').title()} {feature_type}: {importance:.4f}")
+    
+    # Anomaly detection effectiveness
+    anomaly_rates = metrics.get('anomaly_rates', {})
+    print(f"\n ANOMALY DETECTION EFFECTIVENESS:")
+    
+    thresholds = [95, 99, 99.5]
+    for threshold in thresholds:
+        rate = anomaly_rates.get(f'{threshold}th_percentile', 0) * 100
+        separation = anomaly_rates.get(f'{threshold}th_separation', 0)
+        
+        effectiveness = ""
+        if separation > 3.0:
+            effectiveness = "EXCELLENT"
+        elif separation > 2.0:
+            effectiveness = "GOOD"
+        elif separation > 1.0:
+            effectiveness = "FAIR"
+        else:
+            effectiveness = "POOR"
+        
+        print(f"  {threshold}th percentile: {rate:.1f}% detection, {separation:.3f} separation [{effectiveness}]")
+    
+    # Recommendations
+    print(f"\n MODEL RECOMMENDATIONS:")
+    
+    diversity_score = metrics.get('ensemble_diversity', {}).get('diversity_score', 0)
+    if diversity_score > 0.8:
+        print("  ✓ Excellent ensemble diversity - model robust to individual detector failures")
+    elif diversity_score > 0.6:
+        print("  ⚠ Good ensemble diversity - consider adding more diverse detectors")
+    else:
+        print("  ✗ Low ensemble diversity - high risk of correlated failures")
+    
+    stable_count = len(stable_detectors)
+    total_count = len(cv_performance)
+    stability_ratio = stable_count / total_count if total_count > 0 else 0
+    
+    if stability_ratio > 0.7:
+        print("  ✓ Majority of detectors are stable - suitable for production deployment")
+    elif stability_ratio > 0.5:
+        print("  ⚠ Mixed stability - monitor unstable detectors closely")
+    else:
+        print("  ✗ Many unstable detectors - consider retraining with different parameters")
+    
+    # Feature recommendations
+    top_feature_types = {}
+    if hasattr(detector, 'feature_importance') and detector.feature_importance:
+        for feature, importance in detector.feature_importance.items():
+            if 'size' in feature.lower():
+                top_feature_types['Order Size'] = top_feature_types.get('Order Size', 0) + importance
+            elif 'arrival' in feature.lower() or 'timing' in feature.lower():
+                top_feature_types['Timing'] = top_feature_types.get('Timing', 0) + importance
+            elif 'depth' in feature.lower():
+                top_feature_types['Market Depth'] = top_feature_types.get('Market Depth', 0) + importance
+            elif 'spread' in feature.lower():
+                top_feature_types['Spread'] = top_feature_types.get('Spread', 0) + importance
+    
+    print(f"\n FEATURE CATEGORY IMPORTANCE:")
+    for category, total_importance in sorted(top_feature_types.items(), key=lambda x: x[1], reverse=True):
+        print(f"  • {category}: {total_importance:.3f}")
+    
+    print(f"\n DEPLOYMENT READINESS:")
+    score_stats = metrics.get('score_stats', {})
+    
+    if score_stats.get('std', 0) > 0.3:
+        print("  ✓ Good score discrimination - can distinguish normal from toxic orders")
+    else:
+        print("  ⚠ Low score discrimination - may have difficulty separating anomalies")
+    
+    if stability_ratio > 0.7 and diversity_score > 0.7:
+        print("  ✓ READY FOR PRODUCTION - Model meets stability and diversity requirements")
+        print("  • Deploy with confidence monitoring on unstable detectors")
+        print("  • Set up alerts for detection rates outside expected ranges")
+    elif stability_ratio > 0.5:
+        print("  ⚠ READY FOR PILOT TESTING - Monitor closely before full deployment")
+        print("  • Run parallel with existing systems initially")
+        print("  • Focus monitoring on unstable detectors")
+    else:
+        print("  ✗ NOT READY FOR PRODUCTION - Requires further tuning")
+        print("  • Retrain with different hyperparameters")
+        print("  • Consider removing unstable detectors")
+
+
 def main_training_pipeline_with_cv(data_dir="market_data", n_trials=30, cv_folds=5):
     """Enhanced training pipeline with comprehensive cross-validation"""
     print("="*80)
@@ -1735,7 +1893,7 @@ if __name__ == "__main__":
             raise FileNotFoundError("No order files found. Expected files like 'orders_20250621_015122.csv'")
         
         # Train the model with cross-validation
-        detector, scores, metrics = main_training_pipeline_with_cv(
+        detector, scores, metrics = main_training_pipeline_with_cv_enhanced(
             data_dir=data_dir,
             n_trials=40,
             cv_folds=5
